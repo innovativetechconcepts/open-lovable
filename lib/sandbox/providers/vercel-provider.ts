@@ -376,15 +376,15 @@ export class VercelProvider extends SandboxProvider {
         preview: "vite preview"
       },
       dependencies: {
-        react: "^18.2.0",
-        "react-dom": "^18.2.0"
+        react: "18.2.0",
+        "react-dom": "18.2.0"
       },
       devDependencies: {
-        "@vitejs/plugin-react": "^4.0.0",
-        vite: "^4.3.9",
-        tailwindcss: "^3.3.0",
-        postcss: "^8.4.31",
-        autoprefixer: "^10.4.16"
+        "@vitejs/plugin-react": "4.3.4",
+        vite: "4.5.14",
+        tailwindcss: "3.4.17",
+        postcss: "8.4.49",
+        autoprefixer: "10.4.21"
       }
     };
     

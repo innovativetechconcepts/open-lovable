@@ -27,27 +27,35 @@ const identity: PublishIdentity = {
   projectId: target.projectId,
   siteId: target.siteId,
   publicId: target.publicId,
-  releaseId: "release_test",
-  artifactId: "artifact_test",
-  jobId: "job_test",
+  releaseId: "release-test",
+  artifactId: "artifact-test",
+  jobId: "job-test",
 };
 
 class FakeProvider {
   files = new Map<string, Uint8Array>([
+    ["package-lock.json", Buffer.from('{"lockfileVersion":3}')],
     [
       "src/main.jsx",
-      Buffer.from("import ReactDOM from 'react-dom/client'; import App from './App.jsx'; import './index.css';"),
+      Buffer.from(
+        "import ReactDOM from 'react-dom/client'; import App from './App.jsx'; import './index.css';",
+      ),
     ],
     [
       "src/App.jsx",
-      Buffer.from("export default function App(){return <main><h1>Safe page</h1></main>}"),
+      Buffer.from(
+        "export default function App(){return <main><h1>Safe page</h1></main>}",
+      ),
     ],
     ["src/index.css", Buffer.from("@tailwind utilities; body { margin: 0; }")],
   ]);
   commands: string[] = [];
 
   async listFiles(directory?: string) {
-    if (directory?.endsWith("/.aidaos-build/dist") || directory === ".aidaos-build/dist") {
+    if (
+      directory?.endsWith("/.aidaos-build/dist") ||
+      directory === ".aidaos-build/dist"
+    ) {
       return ["index.html", "assets/app.js", "assets/app.css"];
     }
     return [...this.files.keys()];
@@ -71,8 +79,14 @@ class FakeProvider {
 
   async runCommand(command: string) {
     this.commands.push(command);
-    this.files.set(".aidaos-build/dist/assets/app.js", Buffer.from("document.body.dataset.ready='true';"));
-    this.files.set(".aidaos-build/dist/assets/app.css", Buffer.from("body{margin:0}"));
+    this.files.set(
+      ".aidaos-build/dist/assets/app.js",
+      Buffer.from("document.body.dataset.ready='true';"),
+    );
+    this.files.set(
+      ".aidaos-build/dist/assets/app.css",
+      Buffer.from("body{margin:0}"),
+    );
     return { stdout: "built", stderr: "", exitCode: 0, success: true };
   }
 }
@@ -97,13 +111,18 @@ test("builds in the sandbox and emits a bounded, provenance-stamped bundle", asy
   });
   assert.equal(bundle.version, AIDAOS_ADAPTER_VERSION);
   assert.equal(bundle.upstream.commit, AIDAOS_UPSTREAM_COMMIT);
-  assert.equal(bundle.identity.releaseId, "release_test");
-  assert.match(provider.commands[0], /^npm exec -- vite build \.aidaos-build /);
+  assert.equal(bundle.identity.releaseId, "release-test");
+  assert.match(
+    provider.commands[0],
+    /^node node_modules\/vite\/bin\/vite\.js build \.aidaos-build /,
+  );
   assert.deepEqual(
     bundle.artifact.files.map((file) => file.path),
     ["/assets/app.css", "/assets/app.js", "/index.html"],
   );
-  assert.ok(bundle.artifact.files.every((file) => /^[a-f0-9]{64}$/.test(file.sha256)));
+  assert.ok(
+    bundle.artifact.files.every((file) => /^[a-f0-9]{64}$/.test(file.sha256)),
+  );
   assert.match(bundle.sourceDigest, /^[a-f0-9]{64}$/);
 });
 
@@ -119,16 +138,20 @@ test("creates opaque release identities without copying page metadata", () => {
     "siteId",
     "subAccountId",
   ]);
-  assert.match(created.releaseId, /^release_[a-f0-9]{32}$/);
+  assert.match(created.releaseId, /^release-[a-f0-9]{32}$/);
 });
 
 test("refuses duplicate normalized paths before executing a build", async () => {
   const provider = new FakeProvider();
-  provider.files.set("src/App.tsx", Buffer.from("export default function App(){return null}"));
+  provider.files.set(
+    "src/App.tsx",
+    Buffer.from("export default function App(){return null}"),
+  );
   await assert.rejects(
     collectSourceEnvelope(provider as never),
     (error: unknown) =>
-      error instanceof AidaosAdapterError && error.code === "duplicate_source_path",
+      error instanceof AidaosAdapterError &&
+      error.code === "duplicate_source_path",
   );
   assert.equal(provider.commands.length, 0);
 });

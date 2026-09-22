@@ -24,7 +24,10 @@ function publishingEndpoint(): URL {
   const endpoint = new URL(required("AIDAOS_PUBLISHING_ENDPOINT"));
   if (
     endpoint.protocol !== "https:" &&
-    !(endpoint.protocol === "http:" && ["localhost", "127.0.0.1"].includes(endpoint.hostname))
+    !(
+      endpoint.protocol === "http:" &&
+      ["localhost", "127.0.0.1"].includes(endpoint.hostname)
+    )
   ) {
     throw new AidaosAdapterError(
       "publisher_not_configured",
@@ -51,6 +54,13 @@ function configuredTarget(): PublishTarget {
 
 export async function POST(request: Request) {
   try {
+    if (process.env.AIDAOS_PUBLISHING_ENABLED !== "true") {
+      throw new AidaosAdapterError(
+        "publisher_disabled",
+        "aidaOS publishing is not enabled for this deployment.",
+        404,
+      );
+    }
     const body = (await request.json()) as { sandboxId?: unknown };
     if (typeof body.sandboxId !== "string" || !body.sandboxId.trim()) {
       throw new AidaosAdapterError(
@@ -88,9 +98,10 @@ export async function POST(request: Request) {
     } finally {
       clearTimeout(timeout);
     }
-    const result = (await response.json().catch(() => null)) as
-      | Record<string, unknown>
-      | null;
+    const result = (await response.json().catch(() => null)) as Record<
+      string,
+      unknown
+    > | null;
     if (!response.ok) {
       throw new AidaosAdapterError(
         "publisher_rejected_bundle",
@@ -112,10 +123,9 @@ export async function POST(request: Request) {
       {
         success: false,
         code: known ? error.code : "publish_failed",
-        error: error instanceof Error ? error.message : "Publishing failed.",
+        error: known ? error.message : "Publishing failed.",
       },
       { status: known ? error.status : 500 },
     );
   }
 }
-

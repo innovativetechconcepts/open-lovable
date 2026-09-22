@@ -111,7 +111,8 @@ function canonicalJson(value: unknown): string {
 
 function normalizedSourcePath(path: string): string {
   const clean = path.replace(/^\.\//, "");
-  if (clean === "src/main.jsx" || clean === "src/main.js") return "src/main.tsx";
+  if (clean === "src/main.jsx" || clean === "src/main.js")
+    return "src/main.tsx";
   if (clean === "src/App.jsx" || clean === "src/App.js") return "src/App.tsx";
   if (clean === "src/index.css") return "src/styles.css";
   if (clean.endsWith(".jsx")) return `${clean.slice(0, -4)}tsx`;
@@ -141,7 +142,9 @@ function validateSource(files: SourceFile[]): SourceEnvelope {
       !SOURCE_PATH.test(file.path) ||
       file.path.includes("\\") ||
       file.path.includes("%") ||
-      file.path.split("/").some((segment) => segment === "." || segment === "..")
+      file.path
+        .split("/")
+        .some((segment) => segment === "." || segment === "..")
     ) {
       throw new AidaosAdapterError(
         "invalid_source_path",
@@ -181,7 +184,11 @@ function validateSource(files: SourceFile[]): SourceEnvelope {
       );
     }
   }
-  return { files: [...files].sort((left, right) => left.path.localeCompare(right.path)) };
+  return {
+    files: [...files].sort((left, right) =>
+      left.path.localeCompare(right.path),
+    ),
+  };
 }
 
 function fixedMainSource(): string {
@@ -214,7 +221,11 @@ export async function collectSourceEnvelope(
 
 function escapeHtmlText(value: string, maxLength: number): string {
   const clean = value.trim().slice(0, maxLength);
-  if (!clean) throw new AidaosAdapterError("invalid_page_metadata", "Page metadata is required.");
+  if (!clean)
+    throw new AidaosAdapterError(
+      "invalid_page_metadata",
+      "Page metadata is required.",
+    );
   return clean
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
@@ -222,7 +233,11 @@ function escapeHtmlText(value: string, maxLength: number): string {
     .replaceAll('"', "&quot;");
 }
 
-function trustedHtml(releaseId: string, title: string, description: string): string {
+function trustedHtml(
+  releaseId: string,
+  title: string,
+  description: string,
+): string {
   const root = `/_a/${releaseId}/assets`;
   return `<!doctype html>\n<html lang="en">\n  <head>\n    <meta charset="utf-8">\n    <meta name="viewport" content="width=device-width, initial-scale=1">\n    <meta name="description" content="${escapeHtmlText(description, 200)}">\n    <title>${escapeHtmlText(title, 120)}</title>\n    <link rel="stylesheet" href="${root}/app.css">\n  </head>\n  <body>\n    <div id="root"></div>\n    <script type="module" src="${root}/app.js"></script>\n  </body>\n</html>\n`;
 }
@@ -233,6 +248,24 @@ function viteConfig(): string {
 
 function buildIndex(): string {
   return `<!doctype html>\n<html lang="en">\n<head><meta charset="UTF-8" /></head>\n<body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body>\n</html>\n`;
+}
+
+async function buildLockfileDigest(
+  provider: Pick<SandboxProvider, "readFile">,
+): Promise<string> {
+  for (const path of ["package-lock.json", "pnpm-lock.yaml"]) {
+    try {
+      const contents = await provider.readFile(path);
+      if (contents.trim()) return sha256(contents);
+    } catch {
+      // Try the next supported lockfile.
+    }
+  }
+  throw new AidaosAdapterError(
+    "sandbox_toolchain_unavailable",
+    "The isolated builder has no supported dependency lockfile.",
+    422,
+  );
 }
 
 function mimeFor(path: string): string {
@@ -259,7 +292,9 @@ function requireIdentity(identity: PublishIdentity): void {
   }
 }
 
-export function createPublishIdentity(target: Omit<PublishTarget, "title" | "description">): PublishIdentity {
+export function createPublishIdentity(
+  target: Omit<PublishTarget, "title" | "description">,
+): PublishIdentity {
   const suffix = randomUUID().replaceAll("-", "");
   const identity = {
     agencyId: target.agencyId,
@@ -267,16 +302,19 @@ export function createPublishIdentity(target: Omit<PublishTarget, "title" | "des
     projectId: target.projectId,
     siteId: target.siteId,
     publicId: target.publicId,
-    releaseId: `release_${suffix}`,
-    artifactId: `artifact_${suffix}`,
-    jobId: `job_${suffix}`,
+    releaseId: `release-${suffix}`,
+    artifactId: `artifact-${suffix}`,
+    jobId: `job-${suffix}`,
   };
   requireIdentity(identity);
   return identity;
 }
 
 export async function buildPublishBundle(input: {
-  provider: Pick<SandboxProvider, "listFiles" | "readFile" | "readFileBytes" | "runCommand" | "writeFile">;
+  provider: Pick<
+    SandboxProvider,
+    "listFiles" | "readFile" | "readFileBytes" | "runCommand" | "writeFile"
+  >;
   target: PublishTarget;
   identity?: PublishIdentity;
 }): Promise<PublishBundle> {
@@ -284,6 +322,7 @@ export async function buildPublishBundle(input: {
   requireIdentity(identity);
   const source = await collectSourceEnvelope(input.provider);
   const sourceDigest = sha256(canonicalJson(source));
+  const lockfileDigest = await buildLockfileDigest(input.provider);
   const buildRoot = ".aidaos-build";
   for (const file of source.files) {
     await input.provider.writeFile(`${buildRoot}/${file.path}`, file.content);
@@ -291,10 +330,8 @@ export async function buildPublishBundle(input: {
   await input.provider.writeFile(`${buildRoot}/index.html`, buildIndex());
   await input.provider.writeFile(`${buildRoot}/vite.config.ts`, viteConfig());
   const command = [
-    "npm",
-    "exec",
-    "--",
-    "vite",
+    "node",
+    "node_modules/vite/bin/vite.js",
     "build",
     buildRoot,
     "--config",
@@ -315,7 +352,11 @@ export async function buildPublishBundle(input: {
   }
   await input.provider.writeFile(
     `${buildRoot}/dist/index.html`,
-    trustedHtml(identity.releaseId, input.target.title, input.target.description),
+    trustedHtml(
+      identity.releaseId,
+      input.target.title,
+      input.target.description,
+    ),
   );
   const listed = await input.provider.listFiles(`${buildRoot}/dist`);
   if (listed.length === 0 || listed.length > MAX_ARTIFACT_FILES) {
@@ -339,7 +380,9 @@ export async function buildPublishBundle(input: {
         422,
       );
     }
-    const bytes = await input.provider.readFileBytes(`${buildRoot}/dist/${relative}`);
+    const bytes = await input.provider.readFileBytes(
+      `${buildRoot}/dist/${relative}`,
+    );
     if (bytes.byteLength > MAX_ARTIFACT_FILE_BYTES) {
       throw new AidaosAdapterError(
         "artifact_file_too_large",
@@ -374,8 +417,10 @@ export async function buildPublishBundle(input: {
     identity,
     source,
     sourceDigest,
-    templateDigest: sha256(viteConfig() + buildIndex() + AIDAOS_ADAPTER_VERSION),
-    lockfileDigest: sha256("open-lovable-fixed-vite-template-v1"),
+    templateDigest: sha256(
+      viteConfig() + buildIndex() + AIDAOS_ADAPTER_VERSION,
+    ),
+    lockfileDigest,
     artifact: { files, byteLength: total },
   };
 }
