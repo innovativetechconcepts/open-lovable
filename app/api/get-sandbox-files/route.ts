@@ -9,6 +9,16 @@ declare global {
   var activeSandbox: any;
 }
 
+const MAX_FILES = 100;
+const MAX_FILE_BYTES = 256 * 1024;
+const MAX_SOURCE_BYTES = 2 * 1024 * 1024;
+
+class SourceReadError extends Error {
+  constructor(message: string, public readonly status = 500) {
+    super(message);
+  }
+}
+
 async function handleGET() {
   try {
     if (!pilotState().activeSandbox) {
@@ -48,40 +58,47 @@ async function handleGET() {
     
     const fileList = (await findResult.stdout()).split('\n').filter((f: string) => f.trim());
     console.log('[get-sandbox-files] Found', fileList.length, 'files');
+    if (fileList.length > MAX_FILES) {
+      throw new SourceReadError('The project has too many source files to edit safely.', 413);
+    }
     
-    // Read content of each file (limit to reasonable sizes)
+    // Recover the entire bounded source snapshot on every request. A partial
+    // snapshot would make subsequent AI edits overwrite unseen page content.
     const filesContent: Record<string, string> = {};
+    let totalBytes = 0;
     
     for (const filePath of fileList) {
       try {
-        // Check file size first
         const statResult = await pilotState().activeSandbox.runCommand({
           cmd: 'stat',
           args: ['-c', '%s', filePath]
         });
-        
-        if (statResult.exitCode === 0) {
-          const fileSize = parseInt(await statResult.stdout());
-          
-          // Only read files smaller than 10KB
-          if (fileSize < 10000) {
-            const catResult = await pilotState().activeSandbox.runCommand({
-              cmd: 'cat',
-              args: [filePath]
-            });
-            
-            if (catResult.exitCode === 0) {
-              const content = await catResult.stdout();
-              // Remove leading './' from path
-              const relativePath = filePath.replace(/^\.\//, '');
-              filesContent[relativePath] = content;
-            }
-          }
+        if (statResult.exitCode !== 0) {
+          throw new SourceReadError(`Could not inspect ${filePath}.`);
         }
-      } catch (parseError) {
-        console.debug('Error parsing component info:', parseError);
-        // Skip files that can't be read
-        continue;
+        const fileSize = Number((await statResult.stdout()).trim());
+        if (!Number.isSafeInteger(fileSize) || fileSize < 0) {
+          throw new SourceReadError(`Invalid size for ${filePath}.`);
+        }
+        if (fileSize > MAX_FILE_BYTES || totalBytes + fileSize > MAX_SOURCE_BYTES) {
+          throw new SourceReadError('The project source exceeds the edit limit.', 413);
+        }
+        const catResult = await pilotState().activeSandbox.runCommand({
+          cmd: 'cat',
+          args: [filePath]
+        });
+        if (catResult.exitCode !== 0) {
+          throw new SourceReadError(`Could not read ${filePath}.`);
+        }
+        const content = await catResult.stdout();
+        if (Buffer.byteLength(content) !== fileSize) {
+          throw new SourceReadError(`Source changed while reading ${filePath}.`);
+        }
+        totalBytes += fileSize;
+        filesContent[filePath.replace(/^\.\//, '')] = content;
+      } catch (error) {
+        if (error instanceof SourceReadError) throw error;
+        throw new SourceReadError(`Could not recover ${filePath}.`);
       }
     }
     
@@ -169,7 +186,7 @@ async function handleGET() {
     return NextResponse.json({
       success: false,
       error: (error as Error).message
-    }, { status: 500 });
+    }, { status: error instanceof SourceReadError ? error.status : 500 });
   }
 }
 

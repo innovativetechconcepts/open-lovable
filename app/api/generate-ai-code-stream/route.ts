@@ -980,6 +980,10 @@ MORPH FAST APPLY MODE (EDIT-ONLY):
                 method: 'GET',
                 headers: { 'Content-Type': 'application/json' }
               });
+              if (!filesResponse.ok) {
+                const failure = await filesResponse.json();
+                throw new Error(failure.error || 'Could not recover the current project files.');
+              }
               
               if (filesResponse.ok) {
                 const filesData = await filesResponse.json();
@@ -1053,7 +1057,11 @@ MORPH FAST APPLY MODE (EDIT-ONLY):
               }
             } catch (error) {
               console.error('[generate-ai-code-stream] Failed to fetch sandbox files:', error);
+              throw new Error(`Cannot edit without the complete current source: ${(error as Error).message}`);
             }
+          }
+          if (isEdit && !hasBackendFiles) {
+            throw new Error('Cannot edit without the complete current source. Reconnect the builder session and try again.');
           }
           
           // Include current file contents from backend cache

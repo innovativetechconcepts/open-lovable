@@ -622,11 +622,7 @@ body {
 
   async terminate(): Promise<void> {
     if (this.sandbox) {
-      try {
-        await this.sandbox.stop();
-      } catch (e) {
-        console.error('Failed to terminate sandbox:', e);
-      }
+      await this.sandbox.stop();
       this.sandbox = null;
       this.sandboxInfo = null;
     }
