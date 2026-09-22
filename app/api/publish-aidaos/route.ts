@@ -1,8 +1,10 @@
+import { pilotRoute } from '@/lib/aidaos/pilot-route';
 import { NextResponse } from "next/server";
 import { sandboxManager } from "@/lib/sandbox/sandbox-manager";
 import {
   AidaosAdapterError,
   buildPublishBundle,
+  AIDAOS_ADAPTER_VERSION,
   type PublishTarget,
 } from "@/lib/aidaos/publishing-adapter";
 
@@ -52,7 +54,7 @@ function configuredTarget(): PublishTarget {
   };
 }
 
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   try {
     if (process.env.AIDAOS_PUBLISHING_ENABLED !== "true") {
       throw new AidaosAdapterError(
@@ -61,27 +63,25 @@ export async function POST(request: Request) {
         404,
       );
     }
-    const body = (await request.json()) as { sandboxId?: unknown };
-    if (typeof body.sandboxId !== "string" || !body.sandboxId.trim()) {
-      throw new AidaosAdapterError(
-        "invalid_sandbox",
-        "A sandbox identifier is required.",
-      );
+    const text = await request.text();
+    if (Buffer.byteLength(text) > 4096) throw new AidaosAdapterError("invalid_request", "Request is too large.", 413);
+    const body = JSON.parse(text) as {sandboxId?: unknown; action?: unknown; requestId?: unknown; jobId?: unknown; expectedVersion?: unknown};
+    if (body.action !== "preview" && body.action !== "publish") throw new AidaosAdapterError("invalid_action", "Choose Preview or Publish.");
+    let payload: unknown;
+    if (body.action === "preview") {
+      if (typeof body.sandboxId !== "string" || typeof body.requestId !== "string" || !/^[a-f0-9]{32}$/.test(body.requestId)) throw new AidaosAdapterError("invalid_sandbox", "A sandbox and preview request identifier are required.");
+      const provider = await sandboxManager.getOrCreateProvider(body.sandboxId);
+      const target = configuredTarget();
+      payload = await buildPublishBundle({provider, target, identity: {
+        agencyId: target.agencyId, subAccountId: target.subAccountId, projectId: target.projectId, siteId: target.siteId, publicId: target.publicId,
+        releaseId: `release-${body.requestId}`, artifactId: `artifact-${body.requestId}`, jobId: `job-${body.requestId}`,
+      }});
+    } else {
+      if (typeof body.jobId !== "string" || !/^job-[a-f0-9]{32}$/.test(body.jobId) || !Number.isSafeInteger(body.expectedVersion)) throw new AidaosAdapterError("invalid_draft", "A previewed draft is required.");
+      payload = {action: "publish", jobId: body.jobId, expectedVersion: body.expectedVersion};
     }
-    const provider = sandboxManager.getProvider(body.sandboxId);
-    if (!provider) {
-      throw new AidaosAdapterError(
-        "sandbox_not_found",
-        "The isolated builder session is no longer available.",
-        404,
-      );
-    }
-    const bundle = await buildPublishBundle({
-      provider,
-      target: configuredTarget(),
-    });
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 60_000);
+    const timeout = setTimeout(() => controller.abort(), 270_000);
     let response: Response;
     try {
       response = await fetch(publishingEndpoint(), {
@@ -91,9 +91,9 @@ export async function POST(request: Request) {
         headers: {
           authorization: `Bearer ${required("AIDAOS_PUBLISHING_TOKEN")}`,
           "content-type": "application/json",
-          "x-aidaos-adapter-version": bundle.version,
+          "x-aidaos-adapter-version": AIDAOS_ADAPTER_VERSION,
         },
-        body: JSON.stringify(bundle),
+        body: JSON.stringify(payload),
       });
     } finally {
       clearTimeout(timeout);
@@ -115,7 +115,10 @@ export async function POST(request: Request) {
       success: true,
       publicUrl: result?.publicUrl,
       previewUrl: result?.previewUrl,
-      releaseId: bundle.identity.releaseId,
+      releaseId: result?.releaseId,
+      jobId: result?.jobId,
+      expectedVersion: result?.expectedVersion,
+      publicationVersion: result?.publicationVersion,
     });
   } catch (error) {
     const known = error instanceof AidaosAdapterError;
@@ -129,3 +132,5 @@ export async function POST(request: Request) {
     );
   }
 }
+
+export const POST = pilotRoute(handlePOST);

@@ -1,3 +1,5 @@
+import { pilotState } from '@/lib/aidaos/pilot-context';
+import { pilotRoute } from '@/lib/aidaos/pilot-route';
 import { NextRequest, NextResponse } from 'next/server';
 
 // Get active sandbox from global state (in production, use a proper state management solution)
@@ -5,7 +7,7 @@ declare global {
   var activeSandbox: any;
 }
 
-export async function POST(request: NextRequest) {
+async function handlePOST(request: NextRequest) {
   try {
     const { command } = await request.json();
     
@@ -16,7 +18,7 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
     
-    if (!global.activeSandbox) {
+    if (!pilotState().activeSandbox) {
       return NextResponse.json({ 
         success: false, 
         error: 'No active sandbox' 
@@ -31,7 +33,7 @@ export async function POST(request: NextRequest) {
     const args = commandParts.slice(1);
     
     // Execute command using Vercel Sandbox
-    const result = await global.activeSandbox.runCommand({
+    const result = await pilotState().activeSandbox.runCommand({
       cmd,
       args
     });
@@ -61,3 +63,4 @@ export async function POST(request: NextRequest) {
     }, { status: 500 });
   }
 }
+export const POST = pilotRoute(handlePOST);

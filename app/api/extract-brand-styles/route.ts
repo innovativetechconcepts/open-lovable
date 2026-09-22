@@ -1,6 +1,7 @@
+import { pilotRoute } from '@/lib/aidaos/pilot-route';
 import { NextRequest, NextResponse } from 'next/server';
 
-export async function POST(request: NextRequest) {
+async function handlePOST(request: NextRequest) {
   try {
     const body = await request.json();
     const url = body.url;
@@ -70,3 +71,5 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+
+export const POST = pilotRoute(handlePOST);

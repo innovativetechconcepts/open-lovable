@@ -1,15 +1,17 @@
+import { pilotState } from '@/lib/aidaos/pilot-context';
+import { pilotRoute } from '@/lib/aidaos/pilot-route';
 import { NextResponse } from 'next/server';
 import { parseJavaScriptFile, buildComponentTree } from '@/lib/file-parser';
 import { FileManifest, FileInfo, RouteInfo } from '@/types/file-manifest';
-// SandboxState type used implicitly through global.activeSandbox
+// SandboxState type used implicitly through pilotState().activeSandbox
 
 declare global {
   var activeSandbox: any;
 }
 
-export async function GET() {
+async function handleGET() {
   try {
-    if (!global.activeSandbox) {
+    if (!pilotState().activeSandbox) {
       return NextResponse.json({
         success: false,
         error: 'No active sandbox'
@@ -19,7 +21,7 @@ export async function GET() {
     console.log('[get-sandbox-files] Fetching and analyzing file structure...');
     
     // Get list of all relevant files
-    const findResult = await global.activeSandbox.runCommand({
+    const findResult = await pilotState().activeSandbox.runCommand({
       cmd: 'find',
       args: [
         '.',
@@ -53,9 +55,9 @@ export async function GET() {
     for (const filePath of fileList) {
       try {
         // Check file size first
-        const statResult = await global.activeSandbox.runCommand({
+        const statResult = await pilotState().activeSandbox.runCommand({
           cmd: 'stat',
-          args: ['-f', '%z', filePath]
+          args: ['-c', '%s', filePath]
         });
         
         if (statResult.exitCode === 0) {
@@ -63,7 +65,7 @@ export async function GET() {
           
           // Only read files smaller than 10KB
           if (fileSize < 10000) {
-            const catResult = await global.activeSandbox.runCommand({
+            const catResult = await pilotState().activeSandbox.runCommand({
               cmd: 'cat',
               args: [filePath]
             });
@@ -84,7 +86,7 @@ export async function GET() {
     }
     
     // Get directory structure
-    const treeResult = await global.activeSandbox.runCommand({
+    const treeResult = await pilotState().activeSandbox.runCommand({
       cmd: 'find',
       args: ['.', '-type', 'd', '-not', '-path', '*/node_modules*', '-not', '-path', '*/.git*']
     });
@@ -150,8 +152,8 @@ export async function GET() {
     fileManifest.routes = extractRoutes(fileManifest.files);
     
     // Update global file cache with manifest
-    if (global.sandboxState?.fileCache) {
-      global.sandboxState.fileCache.manifest = fileManifest;
+    if (pilotState().sandboxState?.fileCache) {
+      pilotState().sandboxState.fileCache.manifest = fileManifest;
     }
 
     return NextResponse.json({
@@ -206,3 +208,4 @@ function extractRoutes(files: Record<string, FileInfo>): RouteInfo[] {
   
   return routes;
 }
+export const GET = pilotRoute(handleGET);

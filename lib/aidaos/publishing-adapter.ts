@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { SandboxProvider } from "@/lib/sandbox/types";
 
-export const AIDAOS_ADAPTER_VERSION = "aidaos-open-lovable-adapter-v1";
+export const AIDAOS_ADAPTER_VERSION = "aidaos-open-lovable-adapter-v2";
 export const AIDAOS_POLICY_VERSION = "aida-generated-page-pilot-v1";
 export const AIDAOS_UPSTREAM_COMMIT =
   "69bd93bae7a9c97ef989eb70aabe6797fb3dac89";
@@ -9,26 +9,10 @@ export const AIDAOS_UPSTREAM_COMMIT =
 const MAX_SOURCE_FILES = 100;
 const MAX_SOURCE_FILE_BYTES = 256 * 1024;
 const MAX_SOURCE_BYTES = 2 * 1024 * 1024;
-const MAX_ARTIFACT_FILES = 200;
-const MAX_ARTIFACT_FILE_BYTES = 2 * 1024 * 1024;
-const MAX_ARTIFACT_BYTES = 2 * 1024 * 1024;
 const INTERNAL_ID = /^[A-Za-z0-9_-]{1,128}$/;
 const SOURCE_PATH =
   /^src\/[A-Za-z0-9][A-Za-z0-9._/-]{0,178}\.(?:tsx|ts|css|json)$/;
-const ARTIFACT_PATH =
-  /^\/assets\/[A-Za-z0-9](?:[A-Za-z0-9._-]{0,118}[A-Za-z0-9])?\.(?:js|css|png|jpg|webp|woff2)$/;
-
 const SOURCE_EXTENSIONS = [".tsx", ".ts", ".jsx", ".js", ".css", ".json"];
-const MIME_TYPES = new Map([
-  [".html", "text/html; charset=utf-8"],
-  [".js", "text/javascript; charset=utf-8"],
-  [".css", "text/css; charset=utf-8"],
-  [".png", "image/png"],
-  [".jpg", "image/jpeg"],
-  [".webp", "image/webp"],
-  [".woff2", "font/woff2"],
-]);
-
 export class AidaosAdapterError extends Error {
   constructor(
     public readonly code: string,
@@ -47,14 +31,6 @@ export interface SourceFile {
 
 export interface SourceEnvelope {
   files: SourceFile[];
-}
-
-export interface ArtifactFile {
-  path: string;
-  contentType: string;
-  base64: string;
-  byteLength: number;
-  sha256: string;
 }
 
 export interface PublishIdentity {
@@ -78,9 +54,6 @@ export interface PublishBundle {
   identity: PublishIdentity;
   source: SourceEnvelope;
   sourceDigest: string;
-  templateDigest: string;
-  lockfileDigest: string;
-  artifact: { files: ArtifactFile[]; byteLength: number };
 }
 
 export interface PublishTarget {
@@ -115,7 +88,7 @@ function normalizedSourcePath(path: string): string {
     return "src/main.tsx";
   if (clean === "src/App.jsx" || clean === "src/App.js") return "src/App.tsx";
   if (clean === "src/index.css") return "src/styles.css";
-  if (clean.endsWith(".jsx")) return `${clean.slice(0, -4)}tsx`;
+  if (clean.endsWith(".jsx")) return `${clean.slice(0, -4)}.tsx`;
   if (clean.endsWith(".js")) return `${clean.slice(0, -2)}ts`;
   return clean;
 }
@@ -186,7 +159,7 @@ function validateSource(files: SourceFile[]): SourceEnvelope {
   }
   return {
     files: [...files].sort((left, right) =>
-      left.path.localeCompare(right.path),
+      left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
     ),
   };
 }
@@ -219,67 +192,6 @@ export async function collectSourceEnvelope(
   return validateSource(files);
 }
 
-function escapeHtmlText(value: string, maxLength: number): string {
-  const clean = value.trim().slice(0, maxLength);
-  if (!clean)
-    throw new AidaosAdapterError(
-      "invalid_page_metadata",
-      "Page metadata is required.",
-    );
-  return clean
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
-}
-
-function trustedHtml(
-  releaseId: string,
-  title: string,
-  description: string,
-): string {
-  const root = `/_a/${releaseId}/assets`;
-  return `<!doctype html>\n<html lang="en">\n  <head>\n    <meta charset="utf-8">\n    <meta name="viewport" content="width=device-width, initial-scale=1">\n    <meta name="description" content="${escapeHtmlText(description, 200)}">\n    <title>${escapeHtmlText(title, 120)}</title>\n    <link rel="stylesheet" href="${root}/app.css">\n  </head>\n  <body>\n    <div id="root"></div>\n    <script type="module" src="${root}/app.js"></script>\n  </body>\n</html>\n`;
-}
-
-function viteConfig(): string {
-  return `import { defineConfig } from "vite";\nimport react from "@vitejs/plugin-react";\nimport tailwindcss from "tailwindcss";\nimport autoprefixer from "autoprefixer";\n\nexport default defineConfig({\n  plugins: [react()],\n  css: {\n    postcss: {\n      plugins: [tailwindcss({ content: ["./.aidaos-build/src/**/*.{ts,tsx}"] }), autoprefixer()],\n    },\n  },\n  build: {\n    sourcemap: false,\n    cssCodeSplit: false,\n    rollupOptions: {\n      output: {\n        entryFileNames: "assets/app.js",\n        chunkFileNames: "assets/chunk-[hash].js",\n        assetFileNames: (asset) => asset.name?.endsWith(".css") ? "assets/app.css" : "assets/[name]-[hash][extname]",\n      },\n    },\n  },\n});\n`;
-}
-
-function buildIndex(): string {
-  return `<!doctype html>\n<html lang="en">\n<head><meta charset="UTF-8" /></head>\n<body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body>\n</html>\n`;
-}
-
-async function buildLockfileDigest(
-  provider: Pick<SandboxProvider, "readFile">,
-): Promise<string> {
-  for (const path of ["package-lock.json", "pnpm-lock.yaml"]) {
-    try {
-      const contents = await provider.readFile(path);
-      if (contents.trim()) return sha256(contents);
-    } catch {
-      // Try the next supported lockfile.
-    }
-  }
-  throw new AidaosAdapterError(
-    "sandbox_toolchain_unavailable",
-    "The isolated builder has no supported dependency lockfile.",
-    422,
-  );
-}
-
-function mimeFor(path: string): string {
-  const extension = path.slice(path.lastIndexOf("."));
-  const mime = MIME_TYPES.get(extension);
-  if (!mime) {
-    throw new AidaosAdapterError(
-      "unsupported_artifact_type",
-      `The generated artifact type ${extension || "unknown"} is not supported.`,
-    );
-  }
-  return mime;
-}
-
 function requireIdentity(identity: PublishIdentity): void {
   for (const [name, value] of Object.entries(identity)) {
     if (!INTERNAL_ID.test(value)) {
@@ -310,103 +222,15 @@ export function createPublishIdentity(
   return identity;
 }
 
+/** Capture only source. The publisher owns validation, toolchain and compilation. */
 export async function buildPublishBundle(input: {
-  provider: Pick<
-    SandboxProvider,
-    "listFiles" | "readFile" | "readFileBytes" | "runCommand" | "writeFile"
-  >;
+  provider: Pick<SandboxProvider, "listFiles" | "readFile">;
   target: PublishTarget;
   identity?: PublishIdentity;
 }): Promise<PublishBundle> {
   const identity = input.identity ?? createPublishIdentity(input.target);
   requireIdentity(identity);
   const source = await collectSourceEnvelope(input.provider);
-  const sourceDigest = sha256(canonicalJson(source));
-  const lockfileDigest = await buildLockfileDigest(input.provider);
-  const buildRoot = ".aidaos-build";
-  for (const file of source.files) {
-    await input.provider.writeFile(`${buildRoot}/${file.path}`, file.content);
-  }
-  await input.provider.writeFile(`${buildRoot}/index.html`, buildIndex());
-  await input.provider.writeFile(`${buildRoot}/vite.config.ts`, viteConfig());
-  const command = [
-    "node",
-    "node_modules/vite/bin/vite.js",
-    "build",
-    buildRoot,
-    "--config",
-    `${buildRoot}/vite.config.ts`,
-    "--base",
-    `/_a/${identity.releaseId}/`,
-    "--outDir",
-    "dist",
-    "--emptyOutDir",
-  ].join(" ");
-  const built = await input.provider.runCommand(command);
-  if (!built.success) {
-    throw new AidaosAdapterError(
-      "sandbox_build_failed",
-      built.stderr.trim() || "The isolated page build failed.",
-      422,
-    );
-  }
-  await input.provider.writeFile(
-    `${buildRoot}/dist/index.html`,
-    trustedHtml(
-      identity.releaseId,
-      input.target.title,
-      input.target.description,
-    ),
-  );
-  const listed = await input.provider.listFiles(`${buildRoot}/dist`);
-  if (listed.length === 0 || listed.length > MAX_ARTIFACT_FILES) {
-    throw new AidaosAdapterError(
-      "invalid_artifact_files",
-      "The isolated build produced an invalid file count.",
-      422,
-    );
-  }
-  let total = 0;
-  const files: ArtifactFile[] = [];
-  for (const listedPath of listed) {
-    const relative = listedPath
-      .replace(/^\.\//, "")
-      .replace(new RegExp(`^${buildRoot}/dist/`), "");
-    const path = `/${relative}`;
-    if (path !== "/index.html" && !ARTIFACT_PATH.test(path)) {
-      throw new AidaosAdapterError(
-        "invalid_artifact_path",
-        `The isolated build produced unsupported path ${path}.`,
-        422,
-      );
-    }
-    const bytes = await input.provider.readFileBytes(
-      `${buildRoot}/dist/${relative}`,
-    );
-    if (bytes.byteLength > MAX_ARTIFACT_FILE_BYTES) {
-      throw new AidaosAdapterError(
-        "artifact_file_too_large",
-        `The isolated build output ${path} is too large.`,
-        413,
-      );
-    }
-    total += bytes.byteLength;
-    if (total > MAX_ARTIFACT_BYTES) {
-      throw new AidaosAdapterError(
-        "artifact_too_large",
-        "The isolated build is too large for the pilot publisher.",
-        413,
-      );
-    }
-    files.push({
-      path,
-      contentType: mimeFor(path),
-      base64: Buffer.from(bytes).toString("base64"),
-      byteLength: bytes.byteLength,
-      sha256: sha256(bytes),
-    });
-  }
-  files.sort((left, right) => left.path.localeCompare(right.path));
   return {
     version: AIDAOS_ADAPTER_VERSION,
     upstream: {
@@ -416,11 +240,6 @@ export async function buildPublishBundle(input: {
     policyVersion: AIDAOS_POLICY_VERSION,
     identity,
     source,
-    sourceDigest,
-    templateDigest: sha256(
-      viteConfig() + buildIndex() + AIDAOS_ADAPTER_VERSION,
-    ),
-    lockfileDigest,
-    artifact: { files, byteLength: total },
+    sourceDigest: sha256(canonicalJson(source)),
   };
 }

@@ -1,3 +1,5 @@
+import { pilotState } from '@/lib/aidaos/pilot-context';
+import { pilotRoute } from '@/lib/aidaos/pilot-route';
 import { NextResponse } from 'next/server';
 import { SandboxFactory } from '@/lib/sandbox/factory';
 // SandboxProvider type is used through SandboxFactory
@@ -12,7 +14,7 @@ declare global {
   var sandboxState: SandboxState;
 }
 
-export async function POST() {
+async function handlePOST() {
   try {
     console.log('[create-ai-sandbox-v2] Creating sandbox...');
     
@@ -21,24 +23,24 @@ export async function POST() {
     await sandboxManager.terminateAll();
     
     // Also clean up legacy global state
-    if (global.activeSandboxProvider) {
+    if (pilotState().activeSandboxProvider) {
       try {
-        await global.activeSandboxProvider.terminate();
+        await pilotState().activeSandboxProvider?.terminate();
       } catch (e) {
         console.error('Failed to terminate legacy global sandbox:', e);
       }
-      global.activeSandboxProvider = null;
+      pilotState().activeSandboxProvider = null;
     }
     
     // Clear existing files tracking
-    if (global.existingFiles) {
-      global.existingFiles.clear();
+    if (pilotState().existingFiles) {
+      pilotState().existingFiles.clear();
     } else {
-      global.existingFiles = new Set<string>();
+      pilotState().existingFiles = new Set<string>();
     }
 
     // Create new sandbox using factory
-    const provider = SandboxFactory.create();
+    const provider = SandboxFactory.create("vercel");
     const sandboxInfo = await provider.createSandbox();
     
     console.log('[create-ai-sandbox-v2] Setting up Vite React app...');
@@ -48,14 +50,14 @@ export async function POST() {
     sandboxManager.registerSandbox(sandboxInfo.sandboxId, provider);
     
     // Also store in legacy global state for backward compatibility
-    global.activeSandboxProvider = provider;
-    global.sandboxData = {
+    pilotState().activeSandboxProvider = provider;
+    pilotState().sandboxData = {
       sandboxId: sandboxInfo.sandboxId,
       url: sandboxInfo.url
     };
     
     // Initialize sandbox state
-    global.sandboxState = {
+    pilotState().sandboxState = {
       fileCache: {
         files: {},
         lastSync: Date.now(),
@@ -83,13 +85,13 @@ export async function POST() {
     
     // Clean up on error
     await sandboxManager.terminateAll();
-    if (global.activeSandboxProvider) {
+    if (pilotState().activeSandboxProvider) {
       try {
-        await global.activeSandboxProvider.terminate();
+        await pilotState().activeSandboxProvider?.terminate();
       } catch (e) {
         console.error('Failed to terminate sandbox on error:', e);
       }
-      global.activeSandboxProvider = null;
+      pilotState().activeSandboxProvider = null;
     }
     
     return NextResponse.json(
@@ -101,3 +103,4 @@ export async function POST() {
     );
   }
 }
+export const POST = pilotRoute(handlePOST);

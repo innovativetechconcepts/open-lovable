@@ -1,3 +1,5 @@
+import { pilotState } from '@/lib/aidaos/pilot-context';
+import { pilotRoute } from '@/lib/aidaos/pilot-route';
 import { NextResponse } from 'next/server';
 
 declare global {
@@ -6,28 +8,28 @@ declare global {
   var existingFiles: Set<string>;
 }
 
-export async function POST() {
+async function handlePOST() {
   try {
     console.log('[kill-sandbox] Stopping active sandbox...');
 
     let sandboxKilled = false;
 
     // Stop existing sandbox if any
-    if (global.activeSandboxProvider) {
+    if (pilotState().activeSandboxProvider) {
       try {
-        await global.activeSandboxProvider.terminate();
+        await pilotState().activeSandboxProvider?.terminate();
         sandboxKilled = true;
         console.log('[kill-sandbox] Sandbox stopped successfully');
       } catch (e) {
         console.error('[kill-sandbox] Failed to stop sandbox:', e);
       }
-      global.activeSandboxProvider = null;
-      global.sandboxData = null;
+      pilotState().activeSandboxProvider = null;
+      pilotState().sandboxData = null;
     }
     
     // Clear existing files tracking
-    if (global.existingFiles) {
-      global.existingFiles.clear();
+    if (pilotState().existingFiles) {
+      pilotState().existingFiles.clear();
     }
     
     return NextResponse.json({
@@ -47,3 +49,4 @@ export async function POST() {
     );
   }
 }
+export const POST = pilotRoute(handlePOST);

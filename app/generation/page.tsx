@@ -2197,40 +2197,42 @@ Tip: I automatically detect and install npm packages from your code imports (lik
     }
   };
 
-  const publishToAidaos = async () => {
-    if (!sandboxData) {
-      addChatMessage('Please wait for the sandbox to be created before publishing.', 'system');
-      return;
-    }
-
+  const [aidaosDraft, setAidaosDraft] = useState<{jobId: string; expectedVersion: number; sandboxId: string} | null>(null);
+  const previewRequest = useRef<string | null>(null);
+  const previewOnAidaos = async () => {
+    if (!sandboxData) return;
     setLoading(true);
-    addChatMessage('Building an isolated aidaOS preview...', 'system');
+    setAidaosDraft(null);
+    const sandboxId = sandboxData.sandboxId;
+    previewRequest.current ??= crypto.randomUUID().replaceAll('-', '');
+    addChatMessage('Building a private aidaOS preview. The public page stays unchanged.', 'system');
     try {
-      const response = await fetch('/api/publish-aidaos', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sandboxId: sandboxData.sandboxId })
-      });
+      const response = await fetch('/api/publish-aidaos', {method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({action: 'preview', sandboxId, requestId: previewRequest.current})});
       const data = await response.json();
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || 'The trusted publisher rejected this build.');
-      }
-      const previewUrl = typeof data.previewUrl === 'string' ? data.previewUrl : null;
-      const publicUrl = typeof data.publicUrl === 'string' ? data.publicUrl : null;
-      addChatMessage(
-        previewUrl
-          ? `Private aidaOS preview ready: ${previewUrl}`
-          : publicUrl
-            ? `aidaOS page published: ${publicUrl}`
-            : 'The aidaOS publisher admitted this build.',
-        'system'
-      );
-      if (previewUrl) window.open(previewUrl, '_blank', 'noopener,noreferrer');
+      if (!response.ok || !data.success || !data.previewUrl) throw new Error(data.error || 'Preview failed.');
+      setAidaosDraft({jobId: data.jobId, expectedVersion: data.expectedVersion, sandboxId});
+      previewRequest.current = null;
+      addChatMessage(`Private preview (expires in 15 minutes): ${data.previewUrl}\nUse Publish previewed version when you are ready to make this version public.`, 'system');
+      window.open(data.previewUrl, '_blank', 'noopener,noreferrer');
     } catch (error: any) {
-      addChatMessage(`aidaOS publishing failed: ${error.message}`, 'system');
-    } finally {
-      setLoading(false);
-    }
+      addChatMessage(`aidaOS preview failed: ${error.message}`, 'system');
+      // A fresh preview is a new operation. A lost response cannot publish anything.
+      previewRequest.current = null;
+    } finally { setLoading(false); }
+  };
+  const publishToAidaos = async () => {
+    if (!aidaosDraft || aidaosDraft.sandboxId !== sandboxData?.sandboxId) return;
+    setLoading(true);
+    try {
+      const response = await fetch('/api/publish-aidaos', {method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({action: 'publish', jobId: aidaosDraft.jobId, expectedVersion: aidaosDraft.expectedVersion})});
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || 'Publication failed.');
+      addChatMessage(`Publication confirmed for the previewed version: ${data.publicUrl}`, 'system');
+      setAidaosDraft(null);
+    } catch (error: any) { addChatMessage(`aidaOS publication failed: ${error.message}`, 'system'); }
+    finally { setLoading(false); }
   };
 
   const reapplyLastGeneration = async () => {
@@ -3372,12 +3374,19 @@ Focus on the key sections and content, making it clean and modern.`;
           </button>
           {process.env.NEXT_PUBLIC_AIDAOS_PUBLISHING_ENABLED === 'true' && (
             <button
-              onClick={publishToAidaos}
+              onClick={previewOnAidaos}
               disabled={!sandboxData || loading}
               className="px-3 py-1.5 rounded-lg transition-colors bg-gray-950 border border-gray-950 text-white hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed"
               title="Build and open a private aidaOS preview"
             >
               Preview on aidaOS
+            </button>
+          )}
+          {process.env.NEXT_PUBLIC_AIDAOS_PUBLISHING_ENABLED === 'true' && aidaosDraft && aidaosDraft.sandboxId === sandboxData?.sandboxId && (
+            <button onClick={publishToAidaos} disabled={loading}
+              className="px-3 py-1.5 rounded-lg bg-gray-950 text-white disabled:opacity-50"
+              title="Make the version from your last private preview public">
+              Publish previewed version
             </button>
           )}
        

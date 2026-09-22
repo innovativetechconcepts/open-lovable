@@ -1,3 +1,6 @@
+import { pilotFetch } from '@/lib/aidaos/pilot-fetch';
+import { pilotState } from '@/lib/aidaos/pilot-context';
+import { pilotRoute } from '@/lib/aidaos/pilot-route';
 import { NextRequest, NextResponse } from 'next/server';
 import { parseMorphEdits, applyMorphEditToFile } from '@/lib/morph-fast-apply';
 // Sandbox import not needed - using global sandbox from sandbox-manager
@@ -261,7 +264,7 @@ function parseAIResponse(response: string): ParsedResponse {
   return sections;
 }
 
-export async function POST(request: NextRequest) {
+async function handlePOST(request: NextRequest) {
   try {
     const { response, isEdit = false, packages = [], sandboxId } = await request.json();
 
@@ -298,8 +301,8 @@ export async function POST(request: NextRequest) {
     console.log('[apply-ai-code-stream] Packages found:', parsed.packages);
 
     // Initialize existingFiles if not already
-    if (!global.existingFiles) {
-      global.existingFiles = new Set<string>();
+    if (!pilotState().existingFiles) {
+      pilotState().existingFiles = new Set<string>();
     }
 
     // Try to get provider from sandbox manager first
@@ -307,7 +310,7 @@ export async function POST(request: NextRequest) {
 
     // Fall back to global state if not found in manager
     if (!provider) {
-      provider = global.activeSandboxProvider;
+      provider = pilotState().activeSandboxProvider;
     }
 
     // If we have a sandboxId but no provider, try to get or create one
@@ -326,7 +329,7 @@ export async function POST(request: NextRequest) {
         }
 
         // Update legacy global state
-        global.activeSandboxProvider = provider;
+        pilotState().activeSandboxProvider = provider;
         console.log(`[apply-ai-code-stream] Successfully got provider for sandbox ${sandboxId}`);
       } catch (providerError) {
         console.error(`[apply-ai-code-stream] Failed to get or create provider for sandbox ${sandboxId}:`, providerError);
@@ -360,8 +363,8 @@ export async function POST(request: NextRequest) {
         sandboxManager.registerSandbox(sandboxInfo.sandboxId, provider);
 
         // Store in legacy global state
-        global.activeSandboxProvider = provider;
-        global.sandboxData = {
+        pilotState().activeSandboxProvider = provider;
+        pilotState().sandboxData = {
           sandboxId: sandboxInfo.sandboxId,
           url: sandboxInfo.url
         };
@@ -458,7 +461,7 @@ export async function POST(request: NextRequest) {
             const host = req.headers.get('host') || 'localhost:3000';
             const apiUrl = `${protocol}://${host}/api/install-packages`;
 
-            const installResponse = await fetch(apiUrl, {
+            const installResponse = await pilotFetch(apiUrl, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
@@ -611,7 +614,7 @@ export async function POST(request: NextRequest) {
               normalizedPath = 'src/' + normalizedPath;
             }
 
-            const isUpdate = global.existingFiles.has(normalizedPath);
+            const isUpdate = pilotState().existingFiles.has(normalizedPath);
 
             // Remove any CSS imports from JSX/JS files (we're using Tailwind)
             let fileContent = file.content;
@@ -638,8 +641,8 @@ export async function POST(request: NextRequest) {
             await providerInstance.writeFile(normalizedPath, fileContent);
 
             // Update file cache
-            if (global.sandboxState?.fileCache) {
-              global.sandboxState.fileCache.files[normalizedPath] = {
+            if (pilotState().sandboxState?.fileCache) {
+              pilotState().sandboxState.fileCache.files[normalizedPath] = {
                 content: fileContent,
                 lastModified: Date.now()
               };
@@ -649,7 +652,7 @@ export async function POST(request: NextRequest) {
               if (results.filesUpdated) results.filesUpdated.push(normalizedPath);
             } else {
               if (results.filesCreated) results.filesCreated.push(normalizedPath);
-              if (global.existingFiles) global.existingFiles.add(normalizedPath);
+              if (pilotState().existingFiles) pilotState().existingFiles.add(normalizedPath);
             }
 
             await sendProgress({
@@ -746,8 +749,8 @@ export async function POST(request: NextRequest) {
         });
 
         // Track applied files in conversation state
-        if (global.conversationState && results.filesCreated.length > 0) {
-          const messages = global.conversationState.context.messages;
+        if (pilotState().conversationState && results.filesCreated.length > 0) {
+          const messages = pilotState().conversationState.context.messages;
           if (messages.length > 0) {
             const lastMessage = messages[messages.length - 1];
             if (lastMessage.role === 'user') {
@@ -759,15 +762,15 @@ export async function POST(request: NextRequest) {
           }
 
           // Track applied code in project evolution
-          if (global.conversationState.context.projectEvolution) {
-            global.conversationState.context.projectEvolution.majorChanges.push({
+          if (pilotState().conversationState.context.projectEvolution) {
+            pilotState().conversationState.context.projectEvolution.majorChanges.push({
               timestamp: Date.now(),
               description: parsed.explanation || 'Code applied',
               filesAffected: results.filesCreated || []
             });
           }
 
-          global.conversationState.lastUpdated = Date.now();
+          pilotState().conversationState.lastUpdated = Date.now();
         }
 
       } catch (error) {
@@ -797,3 +800,4 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+export const POST = pilotRoute(handlePOST);

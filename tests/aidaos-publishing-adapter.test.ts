@@ -102,8 +102,12 @@ test("normalizes the Open Lovable template into the fixed source envelope", asyn
   assert.match(source.files[1].content, /createRoot/);
 });
 
-test("builds in the sandbox and emits a bounded, provenance-stamped bundle", async () => {
+test("captures source only, ignoring an editable toolchain and forged output", async () => {
   const provider = new FakeProvider();
+  provider.files.set(
+    "node_modules/vite/bin/vite.js",
+    Buffer.from("malicious compiler"),
+  );
   const bundle = await buildPublishBundle({
     provider: provider as never,
     target,
@@ -112,18 +116,34 @@ test("builds in the sandbox and emits a bounded, provenance-stamped bundle", asy
   assert.equal(bundle.version, AIDAOS_ADAPTER_VERSION);
   assert.equal(bundle.upstream.commit, AIDAOS_UPSTREAM_COMMIT);
   assert.equal(bundle.identity.releaseId, "release-test");
-  assert.match(
-    provider.commands[0],
-    /^node node_modules\/vite\/bin\/vite\.js build \.aidaos-build /,
-  );
-  assert.deepEqual(
-    bundle.artifact.files.map((file) => file.path),
-    ["/assets/app.css", "/assets/app.js", "/index.html"],
-  );
-  assert.ok(
-    bundle.artifact.files.every((file) => /^[a-f0-9]{64}$/.test(file.sha256)),
-  );
+  assert.equal(provider.commands.length, 0);
+  assert.equal("artifact" in bundle, false);
+  assert.equal("templateDigest" in bundle, false);
+  assert.equal("lockfileDigest" in bundle, false);
   assert.match(bundle.sourceDigest, /^[a-f0-9]{64}$/);
+});
+
+test("nested JSX retains its dot and canonical path order is ASCII", async () => {
+  const provider = new FakeProvider();
+  provider.files.set(
+    "src/components/Card.jsx",
+    Buffer.from("export default function Card(){return null}"),
+  );
+  provider.files.set(
+    "src/ZCard.tsx",
+    Buffer.from("export default function ZCard(){return null}"),
+  );
+  const source = await collectSourceEnvelope(provider as never);
+  assert.deepEqual(
+    source.files.map((f) => f.path),
+    [
+      "src/App.tsx",
+      "src/ZCard.tsx",
+      "src/components/Card.tsx",
+      "src/main.tsx",
+      "src/styles.css",
+    ],
+  );
 });
 
 test("creates opaque release identities without copying page metadata", () => {

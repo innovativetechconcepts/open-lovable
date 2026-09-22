@@ -1,3 +1,5 @@
+import { headers } from "next/headers";
+import { operatorAuthorized } from "@/lib/aidaos/pilot-auth";
 import type { Metadata } from "next";
 import { Inter, Roboto_Mono } from "next/font/google";
 import localFont from "next/font/local";
@@ -30,11 +32,12 @@ export const metadata: Metadata = {
   description: "Re-imagine any website in seconds with AI-powered website builder.",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  if (!await operatorAuthorized(await headers())) return <html><body>Operator authentication required.</body></html>;
   return (
     <html lang="en">
       <body className={`${inter.variable} ${geistSans.variable} ${geistMono.variable} ${robotoMono.variable} font-sans`}>

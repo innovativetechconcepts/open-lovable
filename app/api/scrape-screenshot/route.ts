@@ -1,7 +1,8 @@
+import { pilotRoute } from '@/lib/aidaos/pilot-route';
 import { NextRequest, NextResponse } from 'next/server';
 import FirecrawlApp from '@mendable/firecrawl-js';
 
-export async function POST(req: NextRequest) {
+async function handlePOST(req: NextRequest) {
   try {
     const { url } = await req.json();
     
@@ -79,3 +80,4 @@ export async function POST(req: NextRequest) {
     }, { status: 500 });
   }
 }
+export const POST = pilotRoute(handlePOST);

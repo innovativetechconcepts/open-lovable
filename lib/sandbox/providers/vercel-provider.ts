@@ -5,6 +5,15 @@ import { SandboxProvider, SandboxInfo, CommandResult } from '../types';
 export class VercelProvider extends SandboxProvider {
   private existingFiles: Set<string> = new Set();
 
+  async reconnect(sandboxId: string): Promise<void> {
+    const credentials = process.env.VERCEL_TOKEN && process.env.VERCEL_TEAM_ID && process.env.VERCEL_PROJECT_ID
+      ? {token: process.env.VERCEL_TOKEN, teamId: process.env.VERCEL_TEAM_ID, projectId: process.env.VERCEL_PROJECT_ID} : {};
+    this.sandbox = await Sandbox.get({sandboxId, ...credentials});
+    if (this.sandbox.status !== 'running') throw new Error('Sandbox expired');
+    this.sandboxInfo = {sandboxId, url: this.sandbox.domain(5173), provider: 'vercel', createdAt: new Date()};
+  }
+  getSdkSandbox() { return this.sandbox; }
+
   async createSandbox(): Promise<SandboxInfo> {
     try {
       
@@ -24,7 +33,7 @@ export class VercelProvider extends SandboxProvider {
       // Create Vercel sandbox
       
       const sandboxConfig: any = {
-        timeout: 300000, // 5 minutes in ms
+        timeout: 1800000, // 30 minutes; within the pilot plan limit
         runtime: 'node22', // Use node22 runtime for Vercel sandboxes
         ports: [5173] // Vite port
       };
@@ -376,8 +385,8 @@ export class VercelProvider extends SandboxProvider {
         preview: "vite preview"
       },
       dependencies: {
-        react: "18.2.0",
-        "react-dom": "18.2.0"
+        react: "19.1.0",
+        "react-dom": "19.1.0"
       },
       devDependencies: {
         "@vitejs/plugin-react": "4.3.4",
