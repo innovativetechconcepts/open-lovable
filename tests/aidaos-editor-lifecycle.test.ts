@@ -5,6 +5,7 @@ import { GET as getSandboxFiles } from '../app/api/get-sandbox-files/route';
 import { POST as createSandbox } from '../app/api/create-ai-sandbox-v2/route';
 import { VercelProvider } from '../lib/sandbox/providers/vercel-provider';
 import { encodeSession, SESSION_COOKIE } from '../lib/aidaos/pilot-context';
+import { APIError } from '@vercel/sandbox/dist/api-client/api-error';
 
 process.env.AIDAOS_OPERATOR_USERNAME = 'operator';
 process.env.AIDAOS_OPERATOR_PASSWORD = 'synthetic-operator-secret-at-least-32-characters';
@@ -76,7 +77,13 @@ test('session replacement stops the owned VM and cleans up a failed new VM', asy
   let expired = false;
   let failSetup = false;
   let failStop = false;
+  let missingStatus = 0;
   VercelProvider.prototype.reconnect = async function (id: string) {
+    if (missingStatus) {
+      throw new APIError(new Response(null, { status: missingStatus }), {
+        message: `Status code ${missingStatus} is not ok`,
+      });
+    }
     if (expired) throw Error('Sandbox expired');
     (this as any).sandboxInfo = {
       sandboxId: id, url: 'https://sandbox.invalid', provider: 'vercel', createdAt: new Date(),
@@ -122,6 +129,21 @@ test('session replacement stops the owned VM and cleans up a failed new VM', asy
     const failed = await createSandbox(ownedRequest('/api/create-ai-sandbox-v2', 'POST'));
     assert.equal(failed.status, 500);
     assert.deepEqual(stopped, ['sbx_new3']);
+
+    failSetup = false;
+    for (const status of [404, 410]) {
+      missingStatus = status;
+      const recovered = await createSandbox(ownedRequest('/api/create-ai-sandbox-v2', 'POST', 'sbx_missing'));
+      assert.equal(recovered.status, 200);
+      assert.match(recovered.headers.get('set-cookie') || '', /__Host-aidaos-builder=/);
+    }
+    assert.equal(created, 5);
+    for (const status of [401, 429, 500]) {
+      missingStatus = status;
+      const rejected = await createSandbox(ownedRequest('/api/create-ai-sandbox-v2', 'POST', 'sbx_old'));
+      assert.equal(rejected.status, 500);
+      assert.equal(created, 5, `HTTP ${status} must not create an orphan replacement`);
+    }
   } finally {
     VercelProvider.prototype.reconnect = originals.reconnect;
     VercelProvider.prototype.createSandbox = originals.create;

@@ -7,9 +7,15 @@ import type { SandboxProvider } from '@/lib/sandbox/types';
 import { sandboxManager } from '@/lib/sandbox/sandbox-manager';
 
 function sandboxAlreadyExpired(error: unknown): boolean {
-  const value = error as { status?: number; statusCode?: number; message?: string };
+  const value = error as {
+    status?: number;
+    statusCode?: number;
+    response?: { status?: number };
+    message?: string;
+  };
   return value?.status === 404 || value?.status === 410 ||
     value?.statusCode === 404 || value?.statusCode === 410 ||
+    value?.response?.status === 404 || value?.response?.status === 410 ||
     /sandbox (?:expired|not found)/i.test(value?.message || '');
 }
 
