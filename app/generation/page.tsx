@@ -2197,6 +2197,42 @@ Tip: I automatically detect and install npm packages from your code imports (lik
     }
   };
 
+  const publishToAidaos = async () => {
+    if (!sandboxData) {
+      addChatMessage('Please wait for the sandbox to be created before publishing.', 'system');
+      return;
+    }
+
+    setLoading(true);
+    addChatMessage('Building an isolated aidaOS preview...', 'system');
+    try {
+      const response = await fetch('/api/publish-aidaos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sandboxId: sandboxData.sandboxId })
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'The trusted publisher rejected this build.');
+      }
+      const previewUrl = typeof data.previewUrl === 'string' ? data.previewUrl : null;
+      const publicUrl = typeof data.publicUrl === 'string' ? data.publicUrl : null;
+      addChatMessage(
+        previewUrl
+          ? `Private aidaOS preview ready: ${previewUrl}`
+          : publicUrl
+            ? `aidaOS page published: ${publicUrl}`
+            : 'The aidaOS publisher admitted this build.',
+        'system'
+      );
+      if (previewUrl) window.open(previewUrl, '_blank', 'noopener,noreferrer');
+    } catch (error: any) {
+      addChatMessage(`aidaOS publishing failed: ${error.message}`, 'system');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const reapplyLastGeneration = async () => {
     if (!conversationContext.lastGeneratedCode) {
       addChatMessage('No previous generation to re-apply', 'system');
@@ -3334,6 +3370,16 @@ Focus on the key sections and content, making it clean and modern.`;
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10" />
             </svg>
           </button>
+          {process.env.NEXT_PUBLIC_AIDAOS_PUBLISHING_ENABLED === 'true' && (
+            <button
+              onClick={publishToAidaos}
+              disabled={!sandboxData || loading}
+              className="px-3 py-1.5 rounded-lg transition-colors bg-gray-950 border border-gray-950 text-white hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Build and open a private aidaOS preview"
+            >
+              Preview on aidaOS
+            </button>
+          )}
        
         </div>
       </div>

@@ -62,6 +62,12 @@ pnpm dev  # or npm run dev / yarn dev
 
 Open [http://localhost:3000](http://localhost:3000)
 
+## aidaOS publishing adapter
+
+This fork is pinned to upstream commit `69bd93bae7a9c97ef989eb70aabe6797fb3dac89` and contains a disabled-by-default adapter for the aidaOS artifact publisher. The adapter copies a canonical source envelope into a fixed build root inside the existing Vercel or E2B sandbox, produces bounded static files, and sends only those files to the trusted publisher. Firebase, Cloudflare, R2, and artifact-admission credentials never enter generated code or the sandbox.
+
+See [`docs/aidaos-integration.md`](docs/aidaos-integration.md) for the boundary, configuration, and rollout gates.
+
 ## License
 
 MIT

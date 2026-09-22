@@ -232,14 +232,43 @@ export class VercelProvider extends SandboxProvider {
     return stdout;
   }
 
+  async readFileBytes(path: string): Promise<Uint8Array> {
+    if (!this.sandbox) {
+      throw new Error('No active sandbox');
+    }
+    const fullPath = path.startsWith('/') ? path : `/vercel/sandbox/${path}`;
+    const result = await this.sandbox.runCommand({
+      cmd: 'base64',
+      args: ['-w', '0', fullPath]
+    });
+    const stdout = typeof result.stdout === 'function'
+      ? await result.stdout()
+      : result.stdout || '';
+    if (result.exitCode !== 0) {
+      const stderr = typeof result.stderr === 'function'
+        ? await result.stderr()
+        : result.stderr || '';
+      throw new Error(`Failed to read binary file: ${stderr}`);
+    }
+    return new Uint8Array(Buffer.from(stdout.trim(), 'base64'));
+  }
+
   async listFiles(directory: string = '/vercel/sandbox'): Promise<string[]> {
     if (!this.sandbox) {
       throw new Error('No active sandbox');
     }
 
+    const fullDirectory = directory.startsWith('/')
+      ? directory
+      : `/vercel/sandbox/${directory}`;
+    const relativePrefix = fullDirectory.replace(/\/$/, '');
+    const isArtifactDirectory = relativePrefix.endsWith('/.aidaos-build/dist');
+    const exclusions = isArtifactDirectory
+      ? ''
+      : ' -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/.next/*" -not -path "*/dist/*" -not -path "*/build/*"';
     const result = await this.sandbox.runCommand({
       cmd: 'sh',
-      args: ['-c', `find ${directory} -type f -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/.next/*" -not -path "*/dist/*" -not -path "*/build/*" | sed "s|^${directory}/||"`],
+      args: ['-c', `find "${relativePrefix}" -type f${exclusions} | sed "s|^${relativePrefix}/||"`],
       cwd: '/'
     });
     
