@@ -50,6 +50,7 @@ class FakeProvider {
     ["src/index.css", Buffer.from("@tailwind utilities; body { margin: 0; }")],
   ]);
   commands: string[] = [];
+  readLimits: { path: string; maxBytes: number }[] = [];
 
   async listFiles(directory?: string) {
     if (
@@ -67,10 +68,11 @@ class FakeProvider {
     return Buffer.from(value).toString("utf8");
   }
 
-  async readFileBytes(path: string) {
+  async readFileBytes(path: string, maxBytes: number) {
     const value = this.files.get(path);
     if (!value) throw new Error(`missing ${path}`);
-    return new Uint8Array(value);
+    this.readLimits.push({ path, maxBytes });
+    return new Uint8Array(value.slice(0, maxBytes + 1));
   }
 
   async writeFile(path: string, content: string) {
@@ -113,6 +115,9 @@ test("carries bounded local media without reading editable build output", async 
   assert.deepEqual(source.media, [
     { path: "public/assets/hero.png", contentBase64: png.toString("base64") },
   ]);
+  assert.deepEqual(provider.readLimits, [
+    { path: "public/assets/hero.png", maxBytes: 1536 * 1024 },
+  ]);
   const bundle = await buildPublishBundle({
     provider: provider as never,
     target,
@@ -133,6 +138,9 @@ test("captures an explicit bounded page-route manifest", async () => {
   provider.files.set("aidaos-pages.json", Buffer.from('["sales","checkout"]'));
   const source = await collectSourceEnvelope(provider as never);
   assert.deepEqual(source.pages, ["checkout", "sales"]);
+  assert.deepEqual(provider.readLimits, [
+    { path: "aidaos-pages.json", maxBytes: 1024 },
+  ]);
   provider.files.set("aidaos-pages.json", Buffer.from('["sales","../admin"]'));
   await assert.rejects(
     collectSourceEnvelope(provider as never),
@@ -140,6 +148,44 @@ test("captures an explicit bounded page-route manifest", async () => {
       error instanceof AidaosAdapterError &&
       error.code === "invalid_source_pages",
   );
+  provider.files.set(
+    "aidaos-pages.json",
+    Buffer.from('["sales"]' + " ".repeat(2048)),
+  );
+  await assert.rejects(
+    collectSourceEnvelope(provider as never),
+    (error: unknown) =>
+      error instanceof AidaosAdapterError &&
+      error.code === "invalid_source_pages",
+  );
+});
+
+test("limits each media read to the remaining aggregate allowance", async () => {
+  const provider = new FakeProvider();
+  provider.files.set("public/assets/large.png", Buffer.alloc(8 * 1024 * 1024));
+  await assert.rejects(
+    collectSourceEnvelope(provider as never),
+    (error: unknown) =>
+      error instanceof AidaosAdapterError &&
+      error.code === "source_media_too_large",
+  );
+  assert.deepEqual(provider.readLimits, [
+    { path: "public/assets/large.png", maxBytes: 1536 * 1024 },
+  ]);
+
+  const second = new FakeProvider();
+  second.files.set("public/assets/first.png", Buffer.alloc(1024 * 1024));
+  second.files.set("public/assets/second.png", Buffer.alloc(1024 * 1024));
+  await assert.rejects(
+    collectSourceEnvelope(second as never),
+    (error: unknown) =>
+      error instanceof AidaosAdapterError &&
+      error.code === "source_media_too_large",
+  );
+  assert.deepEqual(second.readLimits, [
+    { path: "public/assets/first.png", maxBytes: 1536 * 1024 },
+    { path: "public/assets/second.png", maxBytes: 512 * 1024 },
+  ]);
 });
 
 test("captures source only, ignoring an editable toolchain and forged output", async () => {

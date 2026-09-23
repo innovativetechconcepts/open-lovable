@@ -241,14 +241,19 @@ export class VercelProvider extends SandboxProvider {
     return stdout;
   }
 
-  async readFileBytes(path: string): Promise<Uint8Array> {
+  async readFileBytes(path: string, maxBytes: number): Promise<Uint8Array> {
     if (!this.sandbox) {
       throw new Error('No active sandbox');
     }
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) {
+      throw new Error('Invalid bounded file read limit');
+    }
     const fullPath = path.startsWith('/') ? path : `/vercel/sandbox/${path}`;
+    const readLimit = maxBytes + 1;
     const result = await this.sandbox.runCommand({
-      cmd: 'base64',
-      args: ['-w', '0', fullPath]
+      cmd: 'sh',
+      args: ['-c', 'test -f "$2" || exit 1; head -c "$1" -- "$2" | base64 -w 0',
+        'aidaos-bounded-read', String(readLimit), fullPath]
     });
     const stdout = typeof result.stdout === 'function'
       ? await result.stdout()
@@ -259,7 +264,15 @@ export class VercelProvider extends SandboxProvider {
         : result.stderr || '';
       throw new Error(`Failed to read binary file: ${stderr}`);
     }
-    return new Uint8Array(Buffer.from(stdout.trim(), 'base64'));
+    const encoded = stdout.trim();
+    if (encoded.length > Math.ceil(readLimit / 3) * 4) {
+      throw new Error('Bounded file read exceeded its output limit');
+    }
+    const bytes = Buffer.from(encoded, 'base64');
+    if (bytes.toString('base64') !== encoded || bytes.length > readLimit) {
+      throw new Error('Bounded file read returned invalid data');
+    }
+    return new Uint8Array(bytes);
   }
 
   async listFiles(directory: string = '/vercel/sandbox'): Promise<string[]> {

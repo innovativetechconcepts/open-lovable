@@ -152,18 +152,32 @@ export class E2BProvider extends SandboxProvider {
     return result.logs.stdout.join('\n');
   }
 
-  async readFileBytes(path: string): Promise<Uint8Array> {
+  async readFileBytes(path: string, maxBytes: number): Promise<Uint8Array> {
     if (!this.sandbox) {
       throw new Error('No active sandbox');
     }
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) {
+      throw new Error('Invalid bounded file read limit');
+    }
     const fullPath = path.startsWith('/') ? path : `/home/user/app/${path}`;
+    const readLimit = maxBytes + 1;
     const result = await this.sandbox.runCode(`
       import base64
       with open(${JSON.stringify(fullPath)}, 'rb') as f:
-          print(base64.b64encode(f.read()).decode('ascii'))
+          print(base64.b64encode(f.read(${readLimit})).decode('ascii'))
     `);
+    if (result.error) {
+      throw new Error('Failed to read binary file');
+    }
     const encoded = result.logs.stdout.join('').trim();
-    return new Uint8Array(Buffer.from(encoded, 'base64'));
+    if (encoded.length > Math.ceil(readLimit / 3) * 4) {
+      throw new Error('Bounded file read exceeded its output limit');
+    }
+    const bytes = Buffer.from(encoded, 'base64');
+    if (bytes.toString('base64') !== encoded || bytes.length > readLimit) {
+      throw new Error('Bounded file read returned invalid data');
+    }
+    return new Uint8Array(bytes);
   }
 
   async listFiles(directory: string = '/home/user/app'): Promise<string[]> {

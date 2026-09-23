@@ -12,6 +12,7 @@ const MAX_SOURCE_BYTES = 2 * 1024 * 1024;
 const MAX_MEDIA_FILES = 32;
 const MAX_MEDIA_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_MEDIA_BYTES = 1536 * 1024;
+const MAX_PAGES_MANIFEST_BYTES = 1024;
 const INTERNAL_ID = /^[A-Za-z0-9_-]{1,128}$/;
 const SOURCE_PATH =
   /^src\/[A-Za-z0-9][A-Za-z0-9._/-]{0,178}\.(?:tsx|ts|css|json)$/;
@@ -219,7 +220,15 @@ export async function collectSourceEnvelope(
         "Generated media contains duplicate paths.",
       );
     seen.add(path.toLowerCase());
-    const bytes = await provider.readFileBytes(path);
+    const remainingBytes = Math.min(MAX_MEDIA_FILE_BYTES, MAX_MEDIA_BYTES - total);
+    if (remainingBytes < 1) {
+      throw new AidaosAdapterError(
+        "source_media_too_large",
+        "Generated media exceeds the pilot limit.",
+        413,
+      );
+    }
+    const bytes = await provider.readFileBytes(path, remainingBytes);
     total += bytes.byteLength;
     if (
       bytes.byteLength < 1 ||
@@ -244,7 +253,14 @@ export async function collectSourceEnvelope(
   ) {
     let pages: unknown;
     try {
-      pages = JSON.parse(await provider.readFile("aidaos-pages.json"));
+      const bytes = await provider.readFileBytes(
+        "aidaos-pages.json",
+        MAX_PAGES_MANIFEST_BYTES,
+      );
+      if (bytes.byteLength > MAX_PAGES_MANIFEST_BYTES) {
+        throw new Error("Page manifest exceeds the pilot limit");
+      }
+      pages = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
     } catch {
       throw new AidaosAdapterError(
         "invalid_source_pages",

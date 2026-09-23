@@ -45,7 +45,7 @@ export abstract class SandboxProvider {
   abstract runCommand(command: string): Promise<CommandResult>;
   abstract writeFile(path: string, content: string): Promise<void>;
   abstract readFile(path: string): Promise<string>;
-  abstract readFileBytes(path: string): Promise<Uint8Array>;
+  abstract readFileBytes(path: string, maxBytes: number): Promise<Uint8Array>;
   abstract listFiles(directory?: string): Promise<string[]>;
   abstract installPackages(packages: string[]): Promise<CommandResult>;
   abstract getSandboxUrl(): string | null;
