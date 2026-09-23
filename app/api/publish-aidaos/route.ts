@@ -5,8 +5,13 @@ import {
   AidaosAdapterError,
   buildPublishBundle,
   AIDAOS_ADAPTER_VERSION,
-  type PublishTarget,
 } from "@/lib/aidaos/publishing-adapter";
+import {
+  assertTargetActionEnabled,
+  configuredPublishTarget,
+  publisherAuthorization,
+  resolvePublishTargetKey,
+} from "@/lib/aidaos/publish-target";
 
 export const maxDuration = 300;
 
@@ -40,20 +45,6 @@ function publishingEndpoint(): URL {
   return endpoint;
 }
 
-function configuredTarget(): PublishTarget {
-  return {
-    agencyId: required("AIDAOS_AGENCY_ID"),
-    subAccountId: required("AIDAOS_SUBACCOUNT_ID"),
-    projectId: required("AIDAOS_PROJECT_ID"),
-    siteId: required("AIDAOS_SITE_ID"),
-    publicId: required("AIDAOS_PUBLIC_ID"),
-    title: process.env.AIDAOS_PAGE_TITLE?.trim() || "Generated with aidaOS",
-    description:
-      process.env.AIDAOS_PAGE_DESCRIPTION?.trim() ||
-      "A page generated in an isolated aidaOS builder.",
-  };
-}
-
 async function handlePOST(request: Request) {
   try {
     if (process.env.AIDAOS_PUBLISHING_ENABLED !== "true") {
@@ -65,13 +56,15 @@ async function handlePOST(request: Request) {
     }
     const text = await request.text();
     if (Buffer.byteLength(text) > 4096) throw new AidaosAdapterError("invalid_request", "Request is too large.", 413);
-    const body = JSON.parse(text) as {sandboxId?: unknown; action?: unknown; requestId?: unknown; jobId?: unknown; expectedVersion?: unknown};
+    const body = JSON.parse(text) as {sandboxId?: unknown; action?: unknown; requestId?: unknown; jobId?: unknown; expectedVersion?: unknown; target?: unknown};
     if (body.action !== "preview" && body.action !== "publish") throw new AidaosAdapterError("invalid_action", "Choose Preview or Publish.");
+    const targetKey = resolvePublishTargetKey(body.target);
+    assertTargetActionEnabled(targetKey, body.action);
     let payload: unknown;
     if (body.action === "preview") {
       if (typeof body.sandboxId !== "string" || typeof body.requestId !== "string" || !/^[a-f0-9]{32}$/.test(body.requestId)) throw new AidaosAdapterError("invalid_sandbox", "A sandbox and preview request identifier are required.");
       const provider = await sandboxManager.getOrCreateProvider(body.sandboxId);
-      const target = configuredTarget();
+      const target = configuredPublishTarget(targetKey);
       payload = await buildPublishBundle({provider, target, identity: {
         agencyId: target.agencyId, subAccountId: target.subAccountId, projectId: target.projectId, siteId: target.siteId, publicId: target.publicId,
         releaseId: `release-${body.requestId}`, artifactId: `artifact-${body.requestId}`, jobId: `job-${body.requestId}`,
@@ -80,6 +73,7 @@ async function handlePOST(request: Request) {
       if (typeof body.jobId !== "string" || !/^job-[a-f0-9]{32}$/.test(body.jobId) || !Number.isSafeInteger(body.expectedVersion)) throw new AidaosAdapterError("invalid_draft", "A previewed draft is required.");
       payload = {action: "publish", jobId: body.jobId, expectedVersion: body.expectedVersion};
     }
+    const publisherAuth = publisherAuthorization(targetKey);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 270_000);
     let response: Response;
@@ -89,9 +83,10 @@ async function handlePOST(request: Request) {
         redirect: "error",
         signal: controller.signal,
         headers: {
-          authorization: `Bearer ${required("AIDAOS_PUBLISHING_TOKEN")}`,
+          authorization: `Bearer ${publisherAuth.token}`,
           "content-type": "application/json",
           "x-aidaos-adapter-version": AIDAOS_ADAPTER_VERSION,
+          ...(publisherAuth.targetHeader ? { "x-aidaos-import-target": publisherAuth.targetHeader } : {}),
         },
         body: JSON.stringify(payload),
       });
