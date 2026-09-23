@@ -9,10 +9,15 @@ export const AIDAOS_UPSTREAM_COMMIT =
 const MAX_SOURCE_FILES = 100;
 const MAX_SOURCE_FILE_BYTES = 256 * 1024;
 const MAX_SOURCE_BYTES = 2 * 1024 * 1024;
+const MAX_MEDIA_FILES = 32;
+const MAX_MEDIA_FILE_BYTES = 2 * 1024 * 1024;
+const MAX_MEDIA_BYTES = 1536 * 1024;
 const INTERNAL_ID = /^[A-Za-z0-9_-]{1,128}$/;
 const SOURCE_PATH =
   /^src\/[A-Za-z0-9][A-Za-z0-9._/-]{0,178}\.(?:tsx|ts|css|json)$/;
 const SOURCE_EXTENSIONS = [".tsx", ".ts", ".jsx", ".js", ".css", ".json"];
+const MEDIA_PATH =
+  /^public\/assets\/[A-Za-z0-9](?:[A-Za-z0-9._-]{0,118}[A-Za-z0-9])?\.(?:png|jpg|webp|woff2)$/;
 export class AidaosAdapterError extends Error {
   constructor(
     public readonly code: string,
@@ -31,6 +36,8 @@ export interface SourceFile {
 
 export interface SourceEnvelope {
   files: SourceFile[];
+  media?: { path: string; contentBase64: string }[];
+  pages?: string[];
 }
 
 export interface PublishIdentity {
@@ -169,7 +176,7 @@ function fixedMainSource(): string {
 }
 
 export async function collectSourceEnvelope(
-  provider: Pick<SandboxProvider, "listFiles" | "readFile">,
+  provider: Pick<SandboxProvider, "listFiles" | "readFile" | "readFileBytes">,
 ): Promise<SourceEnvelope> {
   const listed = await provider.listFiles();
   const candidates = listed
@@ -189,7 +196,80 @@ export async function collectSourceEnvelope(
     });
   }
   files.push({ path: "src/main.tsx", content: fixedMainSource() });
-  return validateSource(files);
+  const source = validateSource(files);
+  const mediaPaths = listed
+    .map((path) => path.replace(/^\.\//, ""))
+    .filter((path) => path.startsWith("public/assets/"));
+  if (
+    mediaPaths.length > MAX_MEDIA_FILES ||
+    mediaPaths.some((path) => !MEDIA_PATH.test(path))
+  ) {
+    throw new AidaosAdapterError(
+      "invalid_source_media",
+      "Generated media contains an unsupported path or too many files.",
+    );
+  }
+  const media: NonNullable<SourceEnvelope["media"]> = [];
+  const seen = new Set<string>();
+  let total = 0;
+  for (const path of mediaPaths) {
+    if (seen.has(path.toLowerCase()))
+      throw new AidaosAdapterError(
+        "duplicate_source_media",
+        "Generated media contains duplicate paths.",
+      );
+    seen.add(path.toLowerCase());
+    const bytes = await provider.readFileBytes(path);
+    total += bytes.byteLength;
+    if (
+      bytes.byteLength < 1 ||
+      bytes.byteLength > MAX_MEDIA_FILE_BYTES ||
+      total > MAX_MEDIA_BYTES
+    ) {
+      throw new AidaosAdapterError(
+        "source_media_too_large",
+        "Generated media exceeds the pilot limit.",
+        413,
+      );
+    }
+    media.push({ path, contentBase64: Buffer.from(bytes).toString("base64") });
+  }
+  if (media.length)
+    source.media = media.sort((left, right) =>
+      left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
+    );
+  if (
+    listed.includes("aidaos-pages.json") ||
+    listed.includes("./aidaos-pages.json")
+  ) {
+    let pages: unknown;
+    try {
+      pages = JSON.parse(await provider.readFile("aidaos-pages.json"));
+    } catch {
+      throw new AidaosAdapterError(
+        "invalid_source_pages",
+        "Generated page routes are invalid.",
+      );
+    }
+    if (
+      !Array.isArray(pages) ||
+      pages.length < 1 ||
+      pages.length > 20 ||
+      pages.some(
+        (value) =>
+          typeof value !== "string" ||
+          !/^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/.test(value),
+      ) ||
+      new Set(pages).size !== pages.length
+    ) {
+      throw new AidaosAdapterError(
+        "invalid_source_pages",
+        "Generated page routes are invalid.",
+      );
+    }
+    source.pages = [...pages].sort();
+  }
+  return source;
 }
 
 function requireIdentity(identity: PublishIdentity): void {
@@ -224,7 +304,7 @@ export function createPublishIdentity(
 
 /** Capture only source. The publisher owns validation, toolchain and compilation. */
 export async function buildPublishBundle(input: {
-  provider: Pick<SandboxProvider, "listFiles" | "readFile">;
+  provider: Pick<SandboxProvider, "listFiles" | "readFile" | "readFileBytes">;
   target: PublishTarget;
   identity?: PublishIdentity;
 }): Promise<PublishBundle> {

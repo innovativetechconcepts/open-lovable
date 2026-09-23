@@ -102,6 +102,46 @@ test("normalizes the Open Lovable template into the fixed source envelope", asyn
   assert.match(source.files[1].content, /createRoot/);
 });
 
+test("carries bounded local media without reading editable build output", async () => {
+  const provider = new FakeProvider();
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    "base64",
+  );
+  provider.files.set("public/assets/hero.png", png);
+  const source = await collectSourceEnvelope(provider as never);
+  assert.deepEqual(source.media, [
+    { path: "public/assets/hero.png", contentBase64: png.toString("base64") },
+  ]);
+  const bundle = await buildPublishBundle({
+    provider: provider as never,
+    target,
+    identity,
+  });
+  assert.match(bundle.sourceDigest, /^[a-f0-9]{64}$/);
+  provider.files.set("public/assets/hero.svg", Buffer.from("<svg/>"));
+  await assert.rejects(
+    collectSourceEnvelope(provider as never),
+    (error: unknown) =>
+      error instanceof AidaosAdapterError &&
+      error.code === "invalid_source_media",
+  );
+});
+
+test("captures an explicit bounded page-route manifest", async () => {
+  const provider = new FakeProvider();
+  provider.files.set("aidaos-pages.json", Buffer.from('["sales","checkout"]'));
+  const source = await collectSourceEnvelope(provider as never);
+  assert.deepEqual(source.pages, ["checkout", "sales"]);
+  provider.files.set("aidaos-pages.json", Buffer.from('["sales","../admin"]'));
+  await assert.rejects(
+    collectSourceEnvelope(provider as never),
+    (error: unknown) =>
+      error instanceof AidaosAdapterError &&
+      error.code === "invalid_source_pages",
+  );
+});
+
 test("captures source only, ignoring an editable toolchain and forged output", async () => {
   const provider = new FakeProvider();
   provider.files.set(
