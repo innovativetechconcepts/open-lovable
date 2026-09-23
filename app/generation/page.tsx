@@ -2197,6 +2197,47 @@ Tip: I automatically detect and install npm packages from your code imports (lik
     }
   };
 
+  const [aidaosDraft, setAidaosDraft] = useState<{jobId: string; expectedVersion: number; sandboxId: string; target: 'pilot' | 'elite-assist'} | null>(null);
+  const previewRequest = useRef<string | null>(null);
+  const previewOnAidaos = async (target: 'pilot' | 'elite-assist') => {
+    if (!sandboxData) return;
+    setLoading(true);
+    setAidaosDraft(null);
+    const sandboxId = sandboxData.sandboxId;
+    previewRequest.current ??= crypto.randomUUID().replaceAll('-', '');
+    addChatMessage(`Building a private ${target === 'elite-assist' ? 'Elite Assist' : 'aidaOS'} preview. The public page stays unchanged.`, 'system');
+    try {
+      const response = await fetch('/api/publish-aidaos', {method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({action: 'preview', target, sandboxId, requestId: previewRequest.current})});
+      const data = await response.json();
+      if (!response.ok || !data.success || !data.previewUrl) throw new Error(data.error || 'Preview failed.');
+      setAidaosDraft({jobId: data.jobId, expectedVersion: data.expectedVersion, sandboxId, target});
+      previewRequest.current = null;
+      const publicationHint = target === 'elite-assist' && process.env.NEXT_PUBLIC_AIDAOS_ELITE_ASSIST_PUBLICATION_ENABLED !== 'true'
+        ? 'Elite Assist publication is disabled while the review copy and checkout remain unapproved.'
+        : 'Use Publish previewed version when you are ready to make this version public.';
+      addChatMessage(`Private preview (expires in 15 minutes): ${data.previewUrl}\n${publicationHint}`, 'system');
+      window.open(data.previewUrl, '_blank', 'noopener,noreferrer');
+    } catch (error: any) {
+      addChatMessage(`aidaOS preview failed: ${error.message}`, 'system');
+      // A fresh preview is a new operation. A lost response cannot publish anything.
+      previewRequest.current = null;
+    } finally { setLoading(false); }
+  };
+  const publishToAidaos = async () => {
+    if (!aidaosDraft || aidaosDraft.sandboxId !== sandboxData?.sandboxId) return;
+    setLoading(true);
+    try {
+      const response = await fetch('/api/publish-aidaos', {method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({action: 'publish', target: aidaosDraft.target, jobId: aidaosDraft.jobId, expectedVersion: aidaosDraft.expectedVersion})});
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || 'Publication failed.');
+      addChatMessage(`Publication confirmed for the previewed version: ${data.publicUrl}`, 'system');
+      setAidaosDraft(null);
+    } catch (error: any) { addChatMessage(`aidaOS publication failed: ${error.message}`, 'system'); }
+    finally { setLoading(false); }
+  };
+
   const reapplyLastGeneration = async () => {
     if (!conversationContext.lastGeneratedCode) {
       addChatMessage('No previous generation to re-apply', 'system');
@@ -3334,6 +3375,31 @@ Focus on the key sections and content, making it clean and modern.`;
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10" />
             </svg>
           </button>
+          {process.env.NEXT_PUBLIC_AIDAOS_PUBLISHING_ENABLED === 'true' && (
+            <button
+              onClick={() => previewOnAidaos('pilot')}
+              disabled={!sandboxData || loading}
+              className="px-3 py-1.5 rounded-lg transition-colors bg-gray-950 border border-gray-950 text-white hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Build and open a private aidaOS preview"
+            >
+              Preview on aidaOS
+            </button>
+          )}
+          {process.env.NEXT_PUBLIC_AIDAOS_ELITE_ASSIST_PREVIEW_ENABLED === 'true' && (
+            <button onClick={() => previewOnAidaos('elite-assist')} disabled={!sandboxData || loading}
+              className="px-3 py-1.5 rounded-lg transition-colors bg-gray-950 border border-gray-950 text-white hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Build and open a private Elite Assist review preview">
+              Preview Elite Assist
+            </button>
+          )}
+          {process.env.NEXT_PUBLIC_AIDAOS_PUBLISHING_ENABLED === 'true' && aidaosDraft && aidaosDraft.sandboxId === sandboxData?.sandboxId &&
+            (aidaosDraft.target === 'pilot' || process.env.NEXT_PUBLIC_AIDAOS_ELITE_ASSIST_PUBLICATION_ENABLED === 'true') && (
+            <button onClick={publishToAidaos} disabled={loading}
+              className="px-3 py-1.5 rounded-lg bg-gray-950 text-white disabled:opacity-50"
+              title="Make the version from your last private preview public">
+              Publish previewed version
+            </button>
+          )}
        
         </div>
       </div>

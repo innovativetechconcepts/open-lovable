@@ -1,103 +1,80 @@
+import { pilotState } from '@/lib/aidaos/pilot-context';
+import { pilotRoute } from '@/lib/aidaos/pilot-route';
 import { NextResponse } from 'next/server';
 import { SandboxFactory } from '@/lib/sandbox/factory';
-// SandboxProvider type is used through SandboxFactory
-import type { SandboxState } from '@/types/sandbox';
+import { VercelProvider } from '@/lib/sandbox/providers/vercel-provider';
+import type { SandboxProvider } from '@/lib/sandbox/types';
 import { sandboxManager } from '@/lib/sandbox/sandbox-manager';
 
-// Store active sandbox globally
-declare global {
-  var activeSandboxProvider: any;
-  var sandboxData: any;
-  var existingFiles: Set<string>;
-  var sandboxState: SandboxState;
+function sandboxAlreadyExpired(error: unknown): boolean {
+  const value = error as {
+    status?: number;
+    statusCode?: number;
+    response?: { status?: number };
+    message?: string;
+  };
+  return value?.status === 404 || value?.status === 410 ||
+    value?.statusCode === 404 || value?.statusCode === 410 ||
+    value?.response?.status === 404 || value?.response?.status === 410 ||
+    /sandbox (?:expired|not found)/i.test(value?.message || '');
 }
 
-export async function POST() {
+async function handlePOST() {
+  const state = pilotState();
+  let replacement: SandboxProvider | null = null;
   try {
-    console.log('[create-ai-sandbox-v2] Creating sandbox...');
-    
-    // Clean up all existing sandboxes
-    console.log('[create-ai-sandbox-v2] Cleaning up existing sandboxes...');
-    await sandboxManager.terminateAll();
-    
-    // Also clean up legacy global state
-    if (global.activeSandboxProvider) {
+    // The signed session is the only authority for an existing sandbox ID.
+    // This route skips the normal reconnect because an expired VM must not
+    // prevent the operator from creating a replacement.
+    if (state.session) {
+      const previous = new VercelProvider({});
       try {
-        await global.activeSandboxProvider.terminate();
-      } catch (e) {
-        console.error('Failed to terminate legacy global sandbox:', e);
+        await previous.reconnect(state.session.sandboxId);
+        await previous.terminate();
+      } catch (error) {
+        if (!sandboxAlreadyExpired(error)) throw error;
       }
-      global.activeSandboxProvider = null;
-    }
-    
-    // Clear existing files tracking
-    if (global.existingFiles) {
-      global.existingFiles.clear();
-    } else {
-      global.existingFiles = new Set<string>();
+      state.session = null;
     }
 
-    // Create new sandbox using factory
-    const provider = SandboxFactory.create();
-    const sandboxInfo = await provider.createSandbox();
-    
-    console.log('[create-ai-sandbox-v2] Setting up Vite React app...');
-    await provider.setupViteApp();
-    
-    // Register with sandbox manager
-    sandboxManager.registerSandbox(sandboxInfo.sandboxId, provider);
-    
-    // Also store in legacy global state for backward compatibility
-    global.activeSandboxProvider = provider;
-    global.sandboxData = {
-      sandboxId: sandboxInfo.sandboxId,
-      url: sandboxInfo.url
-    };
-    
-    // Initialize sandbox state
-    global.sandboxState = {
+    state.existingFiles = new Set<string>();
+    replacement = SandboxFactory.create('vercel');
+    const sandboxInfo = await replacement.createSandbox();
+    await replacement.setupViteApp();
+    sandboxManager.registerSandbox(sandboxInfo.sandboxId, replacement);
+
+    state.sandboxData = sandboxInfo;
+    state.sandboxState = {
       fileCache: {
         files: {},
         lastSync: Date.now(),
-        sandboxId: sandboxInfo.sandboxId
-      },
-      sandbox: provider, // Store the provider instead of raw sandbox
-      sandboxData: {
         sandboxId: sandboxInfo.sandboxId,
-        url: sandboxInfo.url
-      }
+      },
+      sandbox: replacement,
+      sandboxData: sandboxInfo,
     };
-    
-    console.log('[create-ai-sandbox-v2] Sandbox ready at:', sandboxInfo.url);
-    
+
     return NextResponse.json({
       success: true,
       sandboxId: sandboxInfo.sandboxId,
       url: sandboxInfo.url,
       provider: sandboxInfo.provider,
-      message: 'Sandbox created and Vite React app initialized'
+      message: 'Sandbox created and Vite React app initialized',
     });
-
   } catch (error) {
-    console.error('[create-ai-sandbox-v2] Error:', error);
-    
-    // Clean up on error
-    await sandboxManager.terminateAll();
-    if (global.activeSandboxProvider) {
+    if (replacement) {
       try {
-        await global.activeSandboxProvider.terminate();
-      } catch (e) {
-        console.error('Failed to terminate sandbox on error:', e);
+        await replacement.terminate();
+      } catch (stopError) {
+        console.error('[create-ai-sandbox-v2] Failed to stop replacement:', stopError);
       }
-      global.activeSandboxProvider = null;
     }
-    
+    console.error('[create-ai-sandbox-v2] Error:', error);
     return NextResponse.json(
-      { 
-        error: error instanceof Error ? error.message : 'Failed to create sandbox',
-        details: error instanceof Error ? error.stack : undefined
-      },
-      { status: 500 }
+      { error: 'Could not create a builder session. Please try again.' },
+      { status: 500 },
     );
   }
 }
+
+export const POST = pilotRoute(handlePOST);

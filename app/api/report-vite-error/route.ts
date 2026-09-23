@@ -1,3 +1,5 @@
+import { pilotState } from '@/lib/aidaos/pilot-context';
+import { pilotRoute } from '@/lib/aidaos/pilot-route';
 import { NextRequest, NextResponse } from 'next/server';
 
 declare global {
@@ -5,11 +7,9 @@ declare global {
 }
 
 // Initialize global viteErrors array if it doesn't exist
-if (!global.viteErrors) {
-  global.viteErrors = [];
-}
 
-export async function POST(request: NextRequest) {
+
+async function handlePOST(request: NextRequest) {
   try {
     const { error, file, type = 'runtime-error' } = await request.json();
     
@@ -37,11 +37,11 @@ export async function POST(request: NextRequest) {
     }
     
     // Add to global errors array
-    global.viteErrors.push(errorObj);
+    pilotState().viteErrors.push(errorObj);
     
     // Keep only last 50 errors
-    if (global.viteErrors.length > 50) {
-      global.viteErrors = global.viteErrors.slice(-50);
+    if (pilotState().viteErrors.length > 50) {
+      pilotState().viteErrors = pilotState().viteErrors.slice(-50);
     }
     
     console.log('[report-vite-error] Error reported:', errorObj);
@@ -60,3 +60,4 @@ export async function POST(request: NextRequest) {
     }, { status: 500 });
   }
 }
+export const POST = pilotRoute(handlePOST);

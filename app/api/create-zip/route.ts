@@ -1,12 +1,14 @@
+import { pilotState } from '@/lib/aidaos/pilot-context';
+import { pilotRoute } from '@/lib/aidaos/pilot-route';
 import { NextResponse } from 'next/server';
 
 declare global {
   var activeSandbox: any;
 }
 
-export async function POST() {
+async function handlePOST() {
   try {
-    if (!global.activeSandbox) {
+    if (!pilotState().activeSandbox) {
       return NextResponse.json({ 
         success: false, 
         error: 'No active sandbox' 
@@ -16,7 +18,7 @@ export async function POST() {
     console.log('[create-zip] Creating project zip...');
     
     // Create zip file in sandbox using standard commands
-    const zipResult = await global.activeSandbox.runCommand({
+    const zipResult = await pilotState().activeSandbox.runCommand({
       cmd: 'bash',
       args: ['-c', `zip -r /tmp/project.zip . -x "node_modules/*" ".git/*" ".next/*" "dist/*" "build/*" "*.log"`]
     });
@@ -26,7 +28,7 @@ export async function POST() {
       throw new Error(`Failed to create zip: ${error}`);
     }
     
-    const sizeResult = await global.activeSandbox.runCommand({
+    const sizeResult = await pilotState().activeSandbox.runCommand({
       cmd: 'bash',
       args: ['-c', `ls -la /tmp/project.zip | awk '{print $5}'`]
     });
@@ -35,7 +37,7 @@ export async function POST() {
     console.log(`[create-zip] Created project.zip (${fileSize.trim()} bytes)`);
     
     // Read the zip file and convert to base64
-    const readResult = await global.activeSandbox.runCommand({
+    const readResult = await pilotState().activeSandbox.runCommand({
       cmd: 'base64',
       args: ['/tmp/project.zip']
     });
@@ -68,3 +70,4 @@ export async function POST() {
     );
   }
 }
+export const POST = pilotRoute(handlePOST);

@@ -1,3 +1,5 @@
+import { pilotState } from '@/lib/aidaos/pilot-context';
+import { pilotRoute } from '@/lib/aidaos/pilot-route';
 import { NextResponse } from 'next/server';
 
 declare global {
@@ -9,10 +11,10 @@ declare global {
 
 const RESTART_COOLDOWN_MS = 5000; // 5 second cooldown between restarts
 
-export async function POST() {
+async function handlePOST() {
   try {
     // Check both v1 and v2 global references
-    const provider = global.activeSandbox || global.activeSandboxProvider;
+    const provider = pilotState().activeSandbox || pilotState().activeSandboxProvider;
     
     if (!provider) {
       return NextResponse.json({ 
@@ -22,7 +24,7 @@ export async function POST() {
     }
     
     // Check if restart is already in progress
-    if (global.viteRestartInProgress) {
+    if (pilotState().viteRestartInProgress) {
       console.log('[restart-vite] Vite restart already in progress, skipping...');
       return NextResponse.json({
         success: true,
@@ -32,8 +34,8 @@ export async function POST() {
     
     // Check cooldown
     const now = Date.now();
-    if (global.lastViteRestartTime && (now - global.lastViteRestartTime) < RESTART_COOLDOWN_MS) {
-      const remainingTime = Math.ceil((RESTART_COOLDOWN_MS - (now - global.lastViteRestartTime)) / 1000);
+    if (pilotState().lastViteRestartTime && (now - pilotState().lastViteRestartTime) < RESTART_COOLDOWN_MS) {
+      const remainingTime = Math.ceil((RESTART_COOLDOWN_MS - (now - pilotState().lastViteRestartTime)) / 1000);
       console.log(`[restart-vite] Cooldown active, ${remainingTime}s remaining`);
       return NextResponse.json({
         success: true,
@@ -42,7 +44,7 @@ export async function POST() {
     }
     
     // Set the restart flag
-    global.viteRestartInProgress = true;
+    pilotState().viteRestartInProgress = true;
     
     console.log('[restart-vite] Using provider method to restart Vite...');
     
@@ -81,8 +83,8 @@ export async function POST() {
     }
     
     // Update global state
-    global.lastViteRestartTime = Date.now();
-    global.viteRestartInProgress = false;
+    pilotState().lastViteRestartTime = Date.now();
+    pilotState().viteRestartInProgress = false;
     
     return NextResponse.json({
       success: true,
@@ -93,7 +95,7 @@ export async function POST() {
     console.error('[restart-vite] Error:', error);
     
     // Clear the restart flag on error
-    global.viteRestartInProgress = false;
+    pilotState().viteRestartInProgress = false;
     
     return NextResponse.json({ 
       success: false, 
@@ -101,3 +103,4 @@ export async function POST() {
     }, { status: 500 });
   }
 }
+export const POST = pilotRoute(handlePOST);

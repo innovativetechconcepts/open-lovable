@@ -1,0 +1,341 @@
+import { createHash, randomUUID } from "node:crypto";
+import type { SandboxProvider } from "@/lib/sandbox/types";
+
+export const AIDAOS_ADAPTER_VERSION = "aidaos-open-lovable-adapter-v2";
+export const AIDAOS_POLICY_VERSION = "aida-generated-page-pilot-v1";
+export const AIDAOS_UPSTREAM_COMMIT =
+  "69bd93bae7a9c97ef989eb70aabe6797fb3dac89";
+
+const MAX_SOURCE_FILES = 100;
+const MAX_SOURCE_FILE_BYTES = 256 * 1024;
+const MAX_SOURCE_BYTES = 2 * 1024 * 1024;
+const MAX_MEDIA_FILES = 32;
+const MAX_MEDIA_FILE_BYTES = 2 * 1024 * 1024;
+const MAX_MEDIA_BYTES = 1536 * 1024;
+const MAX_PAGES_MANIFEST_BYTES = 1024;
+const INTERNAL_ID = /^[A-Za-z0-9_-]{1,128}$/;
+const SOURCE_PATH =
+  /^src\/[A-Za-z0-9][A-Za-z0-9._/-]{0,178}\.(?:tsx|ts|css|json)$/;
+const SOURCE_EXTENSIONS = [".tsx", ".ts", ".jsx", ".js", ".css", ".json"];
+const MEDIA_PATH =
+  /^public\/assets\/[A-Za-z0-9](?:[A-Za-z0-9._-]{0,118}[A-Za-z0-9])?\.(?:png|jpg|webp|woff2)$/;
+export class AidaosAdapterError extends Error {
+  constructor(
+    public readonly code: string,
+    message: string,
+    public readonly status = 400,
+  ) {
+    super(message);
+    this.name = "AidaosAdapterError";
+  }
+}
+
+export interface SourceFile {
+  path: string;
+  content: string;
+}
+
+export interface SourceEnvelope {
+  files: SourceFile[];
+  media?: { path: string; contentBase64: string }[];
+  pages?: string[];
+}
+
+export interface PublishIdentity {
+  agencyId: string;
+  subAccountId: string;
+  projectId: string;
+  siteId: string;
+  publicId: string;
+  releaseId: string;
+  artifactId: string;
+  jobId: string;
+}
+
+export interface PublishBundle {
+  version: typeof AIDAOS_ADAPTER_VERSION;
+  upstream: {
+    repository: "firecrawl/open-lovable";
+    commit: typeof AIDAOS_UPSTREAM_COMMIT;
+  };
+  policyVersion: typeof AIDAOS_POLICY_VERSION;
+  identity: PublishIdentity;
+  source: SourceEnvelope;
+  sourceDigest: string;
+}
+
+export interface PublishTarget {
+  agencyId: string;
+  subAccountId: string;
+  projectId: string;
+  siteId: string;
+  publicId: string;
+  title: string;
+  description: string;
+}
+
+function sha256(value: string | Uint8Array): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function normalizedSourcePath(path: string): string {
+  const clean = path.replace(/^\.\//, "");
+  if (clean === "src/main.jsx" || clean === "src/main.js")
+    return "src/main.tsx";
+  if (clean === "src/App.jsx" || clean === "src/App.js") return "src/App.tsx";
+  if (clean === "src/index.css") return "src/styles.css";
+  if (clean.endsWith(".jsx")) return `${clean.slice(0, -4)}.tsx`;
+  if (clean.endsWith(".js")) return `${clean.slice(0, -2)}ts`;
+  return clean;
+}
+
+function normalizeImportExtensions(content: string): string {
+  return content
+    .replace(/(["'][^"']+)\.jsx(["'])/g, "$1$2")
+    .replace(/(["'][^"']+)\.js(["'])/g, "$1$2")
+    .replace(/(["'][^"']+)\/index\.css(["'])/g, "$1/styles.css$2")
+    .replace(/(["'])\.\/index\.css\1/g, '"./styles.css"');
+}
+
+function validateSource(files: SourceFile[]): SourceEnvelope {
+  if (files.length === 0 || files.length > MAX_SOURCE_FILES) {
+    throw new AidaosAdapterError(
+      "invalid_source_files",
+      "The generated project has an invalid source file count.",
+    );
+  }
+  const seen = new Set<string>();
+  let total = 0;
+  for (const file of files) {
+    if (
+      !SOURCE_PATH.test(file.path) ||
+      file.path.includes("\\") ||
+      file.path.includes("%") ||
+      file.path
+        .split("/")
+        .some((segment) => segment === "." || segment === "..")
+    ) {
+      throw new AidaosAdapterError(
+        "invalid_source_path",
+        `The generated project cannot publish source path ${file.path}.`,
+      );
+    }
+    const folded = file.path.toLowerCase();
+    if (seen.has(folded)) {
+      throw new AidaosAdapterError(
+        "duplicate_source_path",
+        `The generated project has a duplicate source path ${file.path}.`,
+      );
+    }
+    seen.add(folded);
+    const size = Buffer.byteLength(file.content);
+    if (size > MAX_SOURCE_FILE_BYTES) {
+      throw new AidaosAdapterError(
+        "source_file_too_large",
+        `The generated source file ${file.path} is too large.`,
+        413,
+      );
+    }
+    total += size;
+  }
+  if (total > MAX_SOURCE_BYTES) {
+    throw new AidaosAdapterError(
+      "source_too_large",
+      "The generated project source is too large.",
+      413,
+    );
+  }
+  for (const required of ["src/main.tsx", "src/App.tsx", "src/styles.css"]) {
+    if (!seen.has(required.toLowerCase())) {
+      throw new AidaosAdapterError(
+        "missing_source_entry",
+        `The generated project is missing ${required}.`,
+      );
+    }
+  }
+  return {
+    files: [...files].sort((left, right) =>
+      left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
+    ),
+  };
+}
+
+function fixedMainSource(): string {
+  return `import { createRoot } from "react-dom/client";\nimport App from "./App";\nimport "./styles.css";\n\ncreateRoot(document.getElementById("root")!).render(<App />);\n`;
+}
+
+export async function collectSourceEnvelope(
+  provider: Pick<SandboxProvider, "listFiles" | "readFile" | "readFileBytes">,
+): Promise<SourceEnvelope> {
+  const listed = await provider.listFiles();
+  const candidates = listed
+    .map((path) => path.replace(/^\.\//, ""))
+    .filter(
+      (path) =>
+        path.startsWith("src/") &&
+        SOURCE_EXTENSIONS.some((extension) => path.endsWith(extension)),
+    );
+  const files: SourceFile[] = [];
+  for (const path of candidates) {
+    const normalizedPath = normalizedSourcePath(path);
+    if (normalizedPath === "src/main.tsx") continue;
+    files.push({
+      path: normalizedPath,
+      content: normalizeImportExtensions(await provider.readFile(path)),
+    });
+  }
+  files.push({ path: "src/main.tsx", content: fixedMainSource() });
+  const source = validateSource(files);
+  const mediaPaths = listed
+    .map((path) => path.replace(/^\.\//, ""))
+    .filter((path) => path.startsWith("public/assets/"));
+  if (
+    mediaPaths.length > MAX_MEDIA_FILES ||
+    mediaPaths.some((path) => !MEDIA_PATH.test(path))
+  ) {
+    throw new AidaosAdapterError(
+      "invalid_source_media",
+      "Generated media contains an unsupported path or too many files.",
+    );
+  }
+  const media: NonNullable<SourceEnvelope["media"]> = [];
+  const seen = new Set<string>();
+  let total = 0;
+  for (const path of mediaPaths) {
+    if (seen.has(path.toLowerCase()))
+      throw new AidaosAdapterError(
+        "duplicate_source_media",
+        "Generated media contains duplicate paths.",
+      );
+    seen.add(path.toLowerCase());
+    const remainingBytes = Math.min(MAX_MEDIA_FILE_BYTES, MAX_MEDIA_BYTES - total);
+    if (remainingBytes < 1) {
+      throw new AidaosAdapterError(
+        "source_media_too_large",
+        "Generated media exceeds the pilot limit.",
+        413,
+      );
+    }
+    const bytes = await provider.readFileBytes(path, remainingBytes);
+    total += bytes.byteLength;
+    if (
+      bytes.byteLength < 1 ||
+      bytes.byteLength > MAX_MEDIA_FILE_BYTES ||
+      total > MAX_MEDIA_BYTES
+    ) {
+      throw new AidaosAdapterError(
+        "source_media_too_large",
+        "Generated media exceeds the pilot limit.",
+        413,
+      );
+    }
+    media.push({ path, contentBase64: Buffer.from(bytes).toString("base64") });
+  }
+  if (media.length)
+    source.media = media.sort((left, right) =>
+      left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
+    );
+  if (
+    listed.includes("aidaos-pages.json") ||
+    listed.includes("./aidaos-pages.json")
+  ) {
+    let pages: unknown;
+    try {
+      const bytes = await provider.readFileBytes(
+        "aidaos-pages.json",
+        MAX_PAGES_MANIFEST_BYTES,
+      );
+      if (bytes.byteLength > MAX_PAGES_MANIFEST_BYTES) {
+        throw new Error("Page manifest exceeds the pilot limit");
+      }
+      pages = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+    } catch {
+      throw new AidaosAdapterError(
+        "invalid_source_pages",
+        "Generated page routes are invalid.",
+      );
+    }
+    if (
+      !Array.isArray(pages) ||
+      pages.length < 1 ||
+      pages.length > 20 ||
+      pages.some(
+        (value) =>
+          typeof value !== "string" ||
+          !/^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/.test(value),
+      ) ||
+      new Set(pages).size !== pages.length
+    ) {
+      throw new AidaosAdapterError(
+        "invalid_source_pages",
+        "Generated page routes are invalid.",
+      );
+    }
+    source.pages = [...pages].sort();
+  }
+  return source;
+}
+
+function requireIdentity(identity: PublishIdentity): void {
+  for (const [name, value] of Object.entries(identity)) {
+    if (!INTERNAL_ID.test(value)) {
+      throw new AidaosAdapterError(
+        "invalid_publish_identity",
+        `The configured ${name} is invalid.`,
+        500,
+      );
+    }
+  }
+}
+
+export function createPublishIdentity(
+  target: Omit<PublishTarget, "title" | "description">,
+): PublishIdentity {
+  const suffix = randomUUID().replaceAll("-", "");
+  const identity = {
+    agencyId: target.agencyId,
+    subAccountId: target.subAccountId,
+    projectId: target.projectId,
+    siteId: target.siteId,
+    publicId: target.publicId,
+    releaseId: `release-${suffix}`,
+    artifactId: `artifact-${suffix}`,
+    jobId: `job-${suffix}`,
+  };
+  requireIdentity(identity);
+  return identity;
+}
+
+/** Capture only source. The publisher owns validation, toolchain and compilation. */
+export async function buildPublishBundle(input: {
+  provider: Pick<SandboxProvider, "listFiles" | "readFile" | "readFileBytes">;
+  target: PublishTarget;
+  identity?: PublishIdentity;
+}): Promise<PublishBundle> {
+  const identity = input.identity ?? createPublishIdentity(input.target);
+  requireIdentity(identity);
+  const source = await collectSourceEnvelope(input.provider);
+  return {
+    version: AIDAOS_ADAPTER_VERSION,
+    upstream: {
+      repository: "firecrawl/open-lovable",
+      commit: AIDAOS_UPSTREAM_COMMIT,
+    },
+    policyVersion: AIDAOS_POLICY_VERSION,
+    identity,
+    source,
+    sourceDigest: sha256(canonicalJson(source)),
+  };
+}

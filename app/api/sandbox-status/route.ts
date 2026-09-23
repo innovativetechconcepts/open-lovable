@@ -1,3 +1,5 @@
+import { pilotState } from '@/lib/aidaos/pilot-context';
+import { pilotRoute } from '@/lib/aidaos/pilot-route';
 import { NextResponse } from 'next/server';
 import { sandboxManager } from '@/lib/sandbox/sandbox-manager';
 
@@ -7,10 +9,10 @@ declare global {
   var existingFiles: Set<string>;
 }
 
-export async function GET() {
+async function handleGET() {
   try {
     // Check sandbox manager first, then fall back to global state
-    const provider = sandboxManager.getActiveProvider() || global.activeSandboxProvider;
+    const provider = sandboxManager.getActiveProvider() || pilotState().activeSandboxProvider;
     const sandboxExists = !!provider;
 
     let sandboxHealthy = false;
@@ -23,9 +25,9 @@ export async function GET() {
         sandboxHealthy = !!providerInfo;
         
         sandboxInfo = {
-          sandboxId: providerInfo?.sandboxId || global.sandboxData?.sandboxId,
-          url: providerInfo?.url || global.sandboxData?.url,
-          filesTracked: global.existingFiles ? Array.from(global.existingFiles) : [],
+          sandboxId: providerInfo?.sandboxId || pilotState().sandboxData?.sandboxId,
+          url: providerInfo?.url || pilotState().sandboxData?.url,
+          filesTracked: pilotState().existingFiles ? Array.from(pilotState().existingFiles) : [],
           lastHealthCheck: new Date().toISOString()
         };
       } catch (error) {
@@ -55,3 +57,4 @@ export async function GET() {
     }, { status: 500 });
   }
 }
+export const GET = pilotRoute(handleGET);

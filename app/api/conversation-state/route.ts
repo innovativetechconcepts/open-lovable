@@ -1,3 +1,5 @@
+import { pilotState } from '@/lib/aidaos/pilot-context';
+import { pilotRoute } from '@/lib/aidaos/pilot-route';
 import { NextRequest, NextResponse } from 'next/server';
 import type { ConversationState } from '@/types/conversation';
 
@@ -6,9 +8,9 @@ declare global {
 }
 
 // GET: Retrieve current conversation state
-export async function GET() {
+async function handleGET() {
   try {
-    if (!global.conversationState) {
+    if (!pilotState().conversationState) {
       return NextResponse.json({
         success: true,
         state: null,
@@ -18,7 +20,7 @@ export async function GET() {
     
     return NextResponse.json({
       success: true,
-      state: global.conversationState
+      state: pilotState().conversationState
     });
   } catch (error) {
     console.error('[conversation-state] Error getting state:', error);
@@ -30,13 +32,13 @@ export async function GET() {
 }
 
 // POST: Reset or update conversation state
-export async function POST(request: NextRequest) {
+async function handlePOST(request: NextRequest) {
   try {
     const { action, data } = await request.json();
     
     switch (action) {
       case 'reset':
-        global.conversationState = {
+        pilotState().conversationState = {
           conversationId: `conv-${Date.now()}`,
           startedAt: Date.now(),
           lastUpdated: Date.now(),
@@ -53,14 +55,14 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({
           success: true,
           message: 'Conversation state reset',
-          state: global.conversationState
+          state: pilotState().conversationState
         });
         
       case 'clear-old':
         // Clear old conversation data but keep recent context
-        if (!global.conversationState) {
+        if (!pilotState().conversationState) {
           // Initialize conversation state if it doesn't exist
-          global.conversationState = {
+          pilotState().conversationState = {
             conversationId: `conv-${Date.now()}`,
             startedAt: Date.now(),
             lastUpdated: Date.now(),
@@ -77,26 +79,26 @@ export async function POST(request: NextRequest) {
           return NextResponse.json({
             success: true,
             message: 'New conversation state initialized',
-            state: global.conversationState
+            state: pilotState().conversationState
           });
         }
         
         // Keep only recent data
-        global.conversationState.context.messages = global.conversationState.context.messages.slice(-5);
-        global.conversationState.context.edits = global.conversationState.context.edits.slice(-3);
-        global.conversationState.context.projectEvolution.majorChanges = 
-          global.conversationState.context.projectEvolution.majorChanges.slice(-2);
+        pilotState().conversationState.context.messages = pilotState().conversationState.context.messages.slice(-5);
+        pilotState().conversationState.context.edits = pilotState().conversationState.context.edits.slice(-3);
+        pilotState().conversationState.context.projectEvolution.majorChanges =
+          pilotState().conversationState.context.projectEvolution.majorChanges.slice(-2);
         
         console.log('[conversation-state] Cleared old conversation data');
         
         return NextResponse.json({
           success: true,
           message: 'Old conversation data cleared',
-          state: global.conversationState
+          state: pilotState().conversationState
         });
         
       case 'update':
-        if (!global.conversationState) {
+        if (!pilotState().conversationState) {
           return NextResponse.json({
             success: false,
             error: 'No active conversation to update'
@@ -106,22 +108,22 @@ export async function POST(request: NextRequest) {
         // Update specific fields if provided
         if (data) {
           if (data.currentTopic) {
-            global.conversationState.context.currentTopic = data.currentTopic;
+            pilotState().conversationState.context.currentTopic = data.currentTopic;
           }
           if (data.userPreferences) {
-            global.conversationState.context.userPreferences = {
-              ...global.conversationState.context.userPreferences,
+            pilotState().conversationState.context.userPreferences = {
+              ...pilotState().conversationState.context.userPreferences,
               ...data.userPreferences
             };
           }
           
-          global.conversationState.lastUpdated = Date.now();
+          pilotState().conversationState.lastUpdated = Date.now();
         }
         
         return NextResponse.json({
           success: true,
           message: 'Conversation state updated',
-          state: global.conversationState
+          state: pilotState().conversationState
         });
         
       default:
@@ -140,9 +142,9 @@ export async function POST(request: NextRequest) {
 }
 
 // DELETE: Clear conversation state
-export async function DELETE() {
+async function handleDELETE() {
   try {
-    global.conversationState = null;
+    pilotState().conversationState = null;
     
     console.log('[conversation-state] Cleared conversation state');
     
@@ -158,3 +160,6 @@ export async function DELETE() {
     }, { status: 500 });
   }
 }
+export const GET = pilotRoute(handleGET);
+export const POST = pilotRoute(handlePOST);
+export const DELETE = pilotRoute(handleDELETE);

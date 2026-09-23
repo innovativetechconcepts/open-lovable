@@ -1,3 +1,6 @@
+import { pilotFetch } from '@/lib/aidaos/pilot-fetch';
+import { pilotState } from '@/lib/aidaos/pilot-context';
+import { pilotRoute } from '@/lib/aidaos/pilot-route';
 import { NextRequest, NextResponse } from 'next/server';
 import { parseMorphEdits, applyMorphEditToFile } from '@/lib/morph-fast-apply';
 import type { SandboxState } from '@/types/sandbox';
@@ -134,7 +137,7 @@ declare global {
   var sandboxState: SandboxState;
 }
 
-export async function POST(request: NextRequest) {
+async function handlePOST(request: NextRequest) {
   try {
     const { response, isEdit = false, packages = [] } = await request.json();
     
@@ -154,12 +157,12 @@ export async function POST(request: NextRequest) {
     }
     
     // Initialize existingFiles if not already
-    if (!global.existingFiles) {
-      global.existingFiles = new Set<string>();
+    if (!pilotState().existingFiles) {
+      pilotState().existingFiles = new Set<string>();
     }
     
     // Get the active sandbox or provider
-    const sandbox = global.activeSandbox || global.activeSandboxProvider;
+    const sandbox = pilotState().activeSandbox || pilotState().activeSandboxProvider;
     
     // If no active sandbox, just return parsed results
     if (!sandbox) {
@@ -206,7 +209,7 @@ export async function POST(request: NextRequest) {
     console.log('[apply-ai-code] Applying code to sandbox...');
     console.log('[apply-ai-code] Is edit mode:', isEdit);
     console.log('[apply-ai-code] Files to write:', parsed.files.map(f => f.path));
-    console.log('[apply-ai-code] Existing files:', Array.from(global.existingFiles));
+    console.log('[apply-ai-code] Existing files:', Array.from(pilotState().existingFiles));
     if (morphEnabled) {
       console.log('[apply-ai-code] Morph Fast Apply enabled');
       if (morphEdits.length > 0) {
@@ -234,7 +237,7 @@ export async function POST(request: NextRequest) {
       console.log('[apply-ai-code] Installing packages from XML tags and tool calls:', uniquePackages);
       
       try {
-        const installResponse = await fetch(`${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/install-packages`, {
+        const installResponse = await pilotFetch(`${process.env.AIDAOS_BUILDER_ORIGIN}/api/install-packages`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ packages: uniquePackages })
@@ -278,7 +281,7 @@ export async function POST(request: NextRequest) {
       
       try {
         console.log('[apply-ai-code] Calling detect-and-install-packages...');
-        const packageResponse = await fetch(`${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/detect-and-install-packages`, {
+        const packageResponse = await pilotFetch(`${process.env.AIDAOS_BUILDER_ORIGIN}/api/detect-and-install-packages`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ files: filesForPackageDetection })
@@ -312,7 +315,7 @@ export async function POST(request: NextRequest) {
           
           try {
             // Call the restart-vite endpoint
-            const restartResponse = await fetch(`${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/restart-vite`, {
+            const restartResponse = await pilotFetch(`${process.env.AIDAOS_BUILDER_ORIGIN}/api/restart-vite`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' }
             });
@@ -343,14 +346,14 @@ export async function POST(request: NextRequest) {
     const morphUpdatedPaths = new Set<string>();
 
     if (morphEnabled && morphEdits.length > 0) {
-      if (!global.activeSandbox) {
+      if (!pilotState().activeSandbox) {
         console.warn('[apply-ai-code] Morph edits found but no active sandbox; skipping Morph application');
       } else {
         console.log(`[apply-ai-code] Applying ${morphEdits.length} fast edits via Morph...`);
         for (const edit of morphEdits) {
           try {
             const result = await applyMorphEditToFile({
-              sandbox: global.activeSandbox,
+              sandbox: pilotState().activeSandbox,
               targetPath: edit.targetFile,
               instructions: edit.instructions,
               updateSnippet: edit.update
@@ -423,7 +426,7 @@ export async function POST(request: NextRequest) {
         }
         
         const fullPath = `/home/user/app/${normalizedPath}`;
-        const isUpdate = global.existingFiles.has(normalizedPath);
+        const isUpdate = pilotState().existingFiles.has(normalizedPath);
         
         // Remove any CSS imports from JSX/JS files (we're using Tailwind)
         let fileContent = file.content;
@@ -456,8 +459,8 @@ export async function POST(request: NextRequest) {
           console.log(`[apply-ai-code] Successfully wrote file: ${fullPath}`);
           
           // Update file cache
-          if (global.sandboxState?.fileCache) {
-            global.sandboxState.fileCache.files[normalizedPath] = {
+          if (pilotState().sandboxState?.fileCache) {
+            pilotState().sandboxState.fileCache.files[normalizedPath] = {
               content: fileContent,
               lastModified: Date.now()
             };
@@ -474,7 +477,7 @@ export async function POST(request: NextRequest) {
           results.filesUpdated.push(normalizedPath);
         } else {
           results.filesCreated.push(normalizedPath);
-          global.existingFiles.add(normalizedPath);
+          pilotState().existingFiles.add(normalizedPath);
         }
       } catch (error) {
         results.errors.push(`Failed to create ${file.path}: ${(error as Error).message}`);
@@ -487,10 +490,10 @@ export async function POST(request: NextRequest) {
       return normalized === 'App.jsx' || normalized === 'App.tsx';
     });
     
-    const appFileExists = global.existingFiles.has('src/App.jsx') || 
-                         global.existingFiles.has('src/App.tsx') ||
-                         global.existingFiles.has('App.jsx') ||
-                         global.existingFiles.has('App.tsx');
+    const appFileExists = pilotState().existingFiles.has('src/App.jsx') ||
+                         pilotState().existingFiles.has('src/App.tsx') ||
+                         pilotState().existingFiles.has('App.jsx') ||
+                         pilotState().existingFiles.has('App.tsx');
     
     if (!isEdit && !appFileInParsed && !appFileExists && parsed.files.length > 0) {
       // Find all component files
@@ -568,8 +571,8 @@ export default App;`;
         return normalized === 'index.css' || f.path === 'src/index.css';
       });
       
-      const indexCssExists = global.existingFiles.has('src/index.css') || 
-                            global.existingFiles.has('index.css');
+      const indexCssExists = pilotState().existingFiles.has('src/index.css') ||
+                            pilotState().existingFiles.has('index.css');
       
       if (!isEdit && !indexCssInParsed && !indexCssExists) {
         try {
@@ -726,7 +729,7 @@ body {
       try {
         console.log('[apply-ai-code] Auto-generating missing components...');
         
-        const autoCompleteResponse = await fetch(
+        const autoCompleteResponse = await pilotFetch(
           `${request.nextUrl.origin}/api/auto-complete-components`,
           {
             method: 'POST',
@@ -760,9 +763,9 @@ body {
     }
     
     // Track applied files in conversation state
-    if (global.conversationState && results.filesCreated.length > 0) {
+    if (pilotState().conversationState && results.filesCreated.length > 0) {
       // Update the last message metadata with edited files
-      const messages = global.conversationState.context.messages;
+      const messages = pilotState().conversationState.context.messages;
       if (messages.length > 0) {
         const lastMessage = messages[messages.length - 1];
         if (lastMessage.role === 'user') {
@@ -774,8 +777,8 @@ body {
       }
       
       // Track applied code in project evolution
-      if (global.conversationState.context.projectEvolution) {
-        global.conversationState.context.projectEvolution.majorChanges.push({
+      if (pilotState().conversationState.context.projectEvolution) {
+        pilotState().conversationState.context.projectEvolution.majorChanges.push({
           timestamp: Date.now(),
           description: parsed.explanation || 'Code applied',
           filesAffected: results.filesCreated
@@ -783,7 +786,7 @@ body {
       }
       
       // Update last updated timestamp
-      global.conversationState.lastUpdated = Date.now();
+      pilotState().conversationState.lastUpdated = Date.now();
       
       console.log('[apply-ai-code] Updated conversation state with applied files:', results.filesCreated);
     }
@@ -798,3 +801,4 @@ body {
     );
   }
 }
+export const POST = pilotRoute(handlePOST);

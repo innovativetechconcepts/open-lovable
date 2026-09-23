@@ -5,6 +5,15 @@ import { SandboxProvider, SandboxInfo, CommandResult } from '../types';
 export class VercelProvider extends SandboxProvider {
   private existingFiles: Set<string> = new Set();
 
+  async reconnect(sandboxId: string): Promise<void> {
+    const credentials = process.env.VERCEL_TOKEN && process.env.VERCEL_TEAM_ID && process.env.VERCEL_PROJECT_ID
+      ? {token: process.env.VERCEL_TOKEN, teamId: process.env.VERCEL_TEAM_ID, projectId: process.env.VERCEL_PROJECT_ID} : {};
+    this.sandbox = await Sandbox.get({sandboxId, ...credentials});
+    if (this.sandbox.status !== 'running') throw new Error('Sandbox expired');
+    this.sandboxInfo = {sandboxId, url: this.sandbox.domain(5173), provider: 'vercel', createdAt: new Date()};
+  }
+  getSdkSandbox() { return this.sandbox; }
+
   async createSandbox(): Promise<SandboxInfo> {
     try {
       
@@ -24,7 +33,7 @@ export class VercelProvider extends SandboxProvider {
       // Create Vercel sandbox
       
       const sandboxConfig: any = {
-        timeout: 300000, // 5 minutes in ms
+        timeout: 1800000, // 30 minutes; within the pilot plan limit
         runtime: 'node22', // Use node22 runtime for Vercel sandboxes
         ports: [5173] // Vite port
       };
@@ -232,14 +241,56 @@ export class VercelProvider extends SandboxProvider {
     return stdout;
   }
 
+  async readFileBytes(path: string, maxBytes: number): Promise<Uint8Array> {
+    if (!this.sandbox) {
+      throw new Error('No active sandbox');
+    }
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) {
+      throw new Error('Invalid bounded file read limit');
+    }
+    const fullPath = path.startsWith('/') ? path : `/vercel/sandbox/${path}`;
+    const readLimit = maxBytes + 1;
+    const result = await this.sandbox.runCommand({
+      cmd: 'sh',
+      args: ['-c', 'test -f "$2" || exit 1; head -c "$1" -- "$2" | base64 -w 0',
+        'aidaos-bounded-read', String(readLimit), fullPath]
+    });
+    const stdout = typeof result.stdout === 'function'
+      ? await result.stdout()
+      : result.stdout || '';
+    if (result.exitCode !== 0) {
+      const stderr = typeof result.stderr === 'function'
+        ? await result.stderr()
+        : result.stderr || '';
+      throw new Error(`Failed to read binary file: ${stderr}`);
+    }
+    const encoded = stdout.trim();
+    if (encoded.length > Math.ceil(readLimit / 3) * 4) {
+      throw new Error('Bounded file read exceeded its output limit');
+    }
+    const bytes = Buffer.from(encoded, 'base64');
+    if (bytes.toString('base64') !== encoded || bytes.length > readLimit) {
+      throw new Error('Bounded file read returned invalid data');
+    }
+    return new Uint8Array(bytes);
+  }
+
   async listFiles(directory: string = '/vercel/sandbox'): Promise<string[]> {
     if (!this.sandbox) {
       throw new Error('No active sandbox');
     }
 
+    const fullDirectory = directory.startsWith('/')
+      ? directory
+      : `/vercel/sandbox/${directory}`;
+    const relativePrefix = fullDirectory.replace(/\/$/, '');
+    const isArtifactDirectory = relativePrefix.endsWith('/.aidaos-build/dist');
+    const exclusions = isArtifactDirectory
+      ? ''
+      : ' -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/.next/*" -not -path "*/dist/*" -not -path "*/build/*"';
     const result = await this.sandbox.runCommand({
       cmd: 'sh',
-      args: ['-c', `find ${directory} -type f -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/.next/*" -not -path "*/dist/*" -not -path "*/build/*" | sed "s|^${directory}/||"`],
+      args: ['-c', `find "${relativePrefix}" -type f${exclusions} | sed "s|^${relativePrefix}/||"`],
       cwd: '/'
     });
     
@@ -347,15 +398,15 @@ export class VercelProvider extends SandboxProvider {
         preview: "vite preview"
       },
       dependencies: {
-        react: "^18.2.0",
-        "react-dom": "^18.2.0"
+        react: "19.1.0",
+        "react-dom": "19.1.0"
       },
       devDependencies: {
-        "@vitejs/plugin-react": "^4.0.0",
-        vite: "^4.3.9",
-        tailwindcss: "^3.3.0",
-        postcss: "^8.4.31",
-        autoprefixer: "^10.4.16"
+        "@vitejs/plugin-react": "4.3.4",
+        vite: "4.5.14",
+        tailwindcss: "3.4.17",
+        postcss: "8.4.49",
+        autoprefixer: "10.4.21"
       }
     };
     
@@ -584,11 +635,7 @@ body {
 
   async terminate(): Promise<void> {
     if (this.sandbox) {
-      try {
-        await this.sandbox.stop();
-      } catch (e) {
-        console.error('Failed to terminate sandbox:', e);
-      }
+      await this.sandbox.stop();
       this.sandbox = null;
       this.sandboxInfo = null;
     }

@@ -1,3 +1,5 @@
+import { pilotState } from '@/lib/aidaos/pilot-context';
+import { pilotRoute } from '@/lib/aidaos/pilot-route';
 import { NextRequest, NextResponse } from 'next/server';
 import { SandboxProvider } from '@/lib/sandbox/types';
 import { sandboxManager } from '@/lib/sandbox/sandbox-manager';
@@ -6,7 +8,7 @@ declare global {
   var activeSandboxProvider: any;
 }
 
-export async function POST(request: NextRequest) {
+async function handlePOST(request: NextRequest) {
   try {
     const { packages } = await request.json();
     
@@ -18,7 +20,7 @@ export async function POST(request: NextRequest) {
     }
     
     // Get provider from sandbox manager or global state
-    const provider = sandboxManager.getActiveProvider() || global.activeSandboxProvider;
+    const provider = sandboxManager.getActiveProvider() || pilotState().activeSandboxProvider;
     
     if (!provider) {
       return NextResponse.json({ 
@@ -46,3 +48,4 @@ export async function POST(request: NextRequest) {
     }, { status: 500 });
   }
 }
+export const POST = pilotRoute(handlePOST);

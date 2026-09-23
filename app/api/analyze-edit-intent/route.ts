@@ -1,3 +1,4 @@
+import { pilotRoute } from '@/lib/aidaos/pilot-route';
 import { NextRequest, NextResponse } from 'next/server';
 import { createGroq } from '@ai-sdk/groq';
 import { createAnthropic } from '@ai-sdk/anthropic';
@@ -59,7 +60,7 @@ const searchPlanSchema = z.object({
   }).optional().describe('Backup search if primary fails')
 });
 
-export async function POST(request: NextRequest) {
+async function handlePOST(request: NextRequest) {
   try {
     const { prompt, manifest, model = 'openai/gpt-oss-20b' } = await request.json();
     
@@ -188,3 +189,4 @@ Create a search plan to find the exact code that needs to be modified. Include s
     }, { status: 500 });
   }
 }
+export const POST = pilotRoute(handlePOST);

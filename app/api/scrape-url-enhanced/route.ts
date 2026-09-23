@@ -1,3 +1,4 @@
+import { pilotRoute } from '@/lib/aidaos/pilot-route';
 import { NextRequest, NextResponse } from 'next/server';
 
 // Function to sanitize smart quotes and other problematic characters
@@ -16,7 +17,7 @@ function sanitizeQuotes(text: string): string {
     .replace(/[\u00A0]/g, ' '); // Non-breaking space
 }
 
-export async function POST(request: NextRequest) {
+async function handlePOST(request: NextRequest) {
   try {
     const { url } = await request.json();
     
@@ -125,3 +126,4 @@ ${sanitizedMarkdown}
     }, { status: 500 });
   }
 }
+export const POST = pilotRoute(handlePOST);

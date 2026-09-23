@@ -1,13 +1,15 @@
+import { pilotState } from '@/lib/aidaos/pilot-context';
+import { pilotRoute } from '@/lib/aidaos/pilot-route';
 import { NextResponse } from 'next/server';
 
 declare global {
   var viteErrorsCache: { errors: any[], timestamp: number } | null;
 }
 
-export async function POST() {
+async function handlePOST() {
   try {
     // Clear the cache
-    global.viteErrorsCache = null;
+    pilotState().viteErrors = [];
     
     console.log('[clear-vite-errors-cache] Cache cleared');
     
@@ -24,3 +26,4 @@ export async function POST() {
     }, { status: 500 });
   }
 }
+export const POST = pilotRoute(handlePOST);

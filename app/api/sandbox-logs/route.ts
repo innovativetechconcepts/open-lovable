@@ -1,12 +1,14 @@
+import { pilotState } from '@/lib/aidaos/pilot-context';
+import { pilotRoute } from '@/lib/aidaos/pilot-route';
 import { NextResponse } from 'next/server';
 
 declare global {
   var activeSandbox: any;
 }
 
-export async function GET() {
+async function handleGET() {
   try {
-    if (!global.activeSandbox) {
+    if (!pilotState().activeSandbox) {
       return NextResponse.json({ 
         success: false, 
         error: 'No active sandbox' 
@@ -16,7 +18,7 @@ export async function GET() {
     console.log('[sandbox-logs] Fetching Vite dev server logs...');
     
     // Check if Vite processes are running
-    const psResult = await global.activeSandbox.runCommand({
+    const psResult = await pilotState().activeSandbox.runCommand({
       cmd: 'ps',
       args: ['aux']
     });
@@ -43,7 +45,7 @@ export async function GET() {
     
     // Try to read any recent log files
     try {
-      const findResult = await global.activeSandbox.runCommand({
+      const findResult = await pilotState().activeSandbox.runCommand({
         cmd: 'find',
         args: ['/tmp', '-name', '*vite*', '-name', '*.log', '-type', 'f']
       });
@@ -53,7 +55,7 @@ export async function GET() {
         
         for (const logFile of logFiles.slice(0, 2)) {
           try {
-            const catResult = await global.activeSandbox.runCommand({
+            const catResult = await pilotState().activeSandbox.runCommand({
               cmd: 'tail',
               args: ['-n', '10', logFile]
             });
@@ -87,3 +89,4 @@ export async function GET() {
     }, { status: 500 });
   }
 }
+export const GET = pilotRoute(handleGET);
